@@ -1,0 +1,117 @@
+# WorkPilot v2 — Docker Compose 部署配置
+#
+# 架构约束（来自 系统架构.md）：
+#   - 仅 nginx 端口（80）对外暴露
+#   - postgres(5432) / backend(8000) / ollama(11434) 均不暴露给宿主机
+#   - APScheduler 使用 PostgreSQLJobStore，多 Worker 下防止任务重复执行
+#
+# 快速启动：
+#   cp backend/.env.example backend/.env   # 修改配置
+#   docker compose up -d
+#   docker compose exec ollama ollama pull nomic-embed-text
+#   docker compose exec ollama ollama pull qwen2.5:7b
+#
+# 查看日志：
+#   docker compose logs -f backend
+
+services:
+
+  # ── Nginx：唯一对外暴露的服务（含 React 前端产物）────────────
+  nginx:
+    build:
+      context: .                      # 项目根目录，使 frontend/ 和 nginx/ 均可访问
+      dockerfile: nginx/Dockerfile    # 多阶段构建：node build → nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro   # 配置热替换无需重建镜像
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - workpilot
+
+  # ── FastAPI 后端 ───────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - ./backend/.env
+    volumes:
+      - uploads:/data/uploads
+      - ./backend/logs:/app/logs
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s   # 留够迁移 + seed 时间
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - workpilot
+
+  # ── PostgreSQL 14+ with pgvector ──────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB:       workpilot
+      POSTGRES_USER:     workpilot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-workpilot_change_me}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workpilot -d workpilot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - workpilot
+
+  # ── Ollama 本地模型服务 ────────────────────────────────────────
+  # 首次部署后需手动拉取模型：
+  #   docker compose exec ollama ollama pull nomic-embed-text
+  #   docker compose exec ollama ollama pull qwen2.5:7b
+  # 若宿主机有 GPU，参考 ollama 文档开启 GPU 直通。
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_models:/root/.ollama
+    expose:
+      - "11434"
+    restart: unless-stopped
+    networks:
+      - workpilot
+    # GPU 支持（可选）：
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+# ── 数据卷 ─────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    driver: local
+  ollama_models:
+    driver: local
+  uploads:
+    driver: local
+
+# ── 内部网络（服务间通信，不对宿主机暴露）─────────────────────
+networks:
+  workpilot:
+    driver: bridge

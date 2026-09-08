@@ -1,0 +1,68 @@
+2026-06-08 09:36:01.249 | INFO     | core.logger:setup_logger:92 | req_id=- | user_id=- | Logger initialized | level=DEBUG | env=development | dir=logs
+2026-06-08 09:36:01.250 | INFO     | main:lifespan:40 | req_id=- | user_id=- | WorkPilot v2 starting | env=development
+2026-06-08 09:36:08.632 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | GET /api/chat/conversations | client=127.0.0.1
+2026-06-08 09:36:08.778 | WARNING  | main:http_exception_handler:80 | req_id=- | user_id=- | HTTP exception | GET /api/chat/conversations | status=401 | detail={'code': 40101, 'message': 'Token 无效或已过期'}
+2026-06-08 09:36:08.787 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | GET /api/chat/conversations | client=127.0.0.1
+2026-06-08 09:36:08.789 | WARNING  | main:http_exception_handler:80 | req_id=- | user_id=- | HTTP exception | GET /api/chat/conversations | status=401 | detail={'code': 40101, 'message': 'Token 无效或已过期'}
+2026-06-08 09:36:13.229 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | POST /api/auth/login | client=127.0.0.1
+2026-06-08 09:36:13.451 | WARNING  | api.auth:login:132 | req_id=- | user_id=- | Login fail: user not found | username=ccc
+2026-06-08 09:36:13.454 | WARNING  | main:http_exception_handler:80 | req_id=- | user_id=- | HTTP exception | POST /api/auth/login | status=401 | detail={'code': 40001, 'message': '账号或密码错误'}
+2026-06-08 09:36:17.289 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | POST /api/auth/login | client=127.0.0.1
+2026-06-08 09:36:17.597 | INFO     | api.auth:login:170 | req_id=- | user_id=- | User login success | user=yunwei
+2026-06-08 09:36:17.730 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | GET /api/chat/conversations | client=127.0.0.1
+2026-06-08 09:36:17.865 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | GET /api/chat/conversations | client=127.0.0.1
+2026-06-08 09:36:29.801 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | POST /api/chat/stream | client=127.0.0.1
+2026-06-08 09:36:42.334 | DEBUG    | graph.nodes:classify_intent_node:150 | req_id=- | user_id=- | [classify_intent] LLM分类 | intent=chitchat | query='今天天气'
+2026-06-08 09:36:49.058 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | GET /api/chat/conversations | client=127.0.0.1
+2026-06-08 09:37:04.445 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | GET /api/chat/conversations/7 | client=127.0.0.1
+2026-06-08 09:37:05.524 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | GET /api/chat/conversations/6 | client=127.0.0.1
+2026-06-08 09:37:07.152 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | GET /api/chat/conversations/7 | client=127.0.0.1
+2026-06-08 09:37:07.872 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | GET /api/chat/conversations/5 | client=127.0.0.1
+2026-06-08 10:01:52.026 | INFO     | main:lifespan:43 | req_id=- | user_id=- | WorkPilot v2 shutting down
+2026-06-08 10:01:54.710 | INFO     | core.logger:setup_logger:92 | req_id=- | user_id=- | Logger initialized | level=DEBUG | env=development | dir=logs
+2026-06-08 10:01:54.710 | INFO     | main:lifespan:40 | req_id=- | user_id=- | WorkPilot v2 starting | env=development
+2026-06-08 10:01:58.320 | INFO     | main:lifespan:43 | req_id=- | user_id=- | WorkPilot v2 shutting down
+2026-06-08 10:02:00.137 | INFO     | core.logger:setup_logger:92 | req_id=- | user_id=- | Logger initialized | level=DEBUG | env=development | dir=logs
+2026-06-08 10:02:00.137 | INFO     | main:lifespan:40 | req_id=- | user_id=- | WorkPilot v2 starting | env=development
+2026-06-08 10:02:10.055 | INFO     | main:lifespan:43 | req_id=- | user_id=- | WorkPilot v2 shutting down
+2026-06-08 10:02:11.617 | INFO     | core.logger:setup_logger:92 | req_id=- | user_id=- | Logger initialized | level=DEBUG | env=development | dir=logs
+2026-06-08 10:02:11.618 | INFO     | main:lifespan:40 | req_id=- | user_id=- | WorkPilot v2 starting | env=development
+2026-06-08 10:02:20.671 | INFO     | main:lifespan:43 | req_id=- | user_id=- | WorkPilot v2 shutting down
+2026-06-08 10:02:22.167 | INFO     | core.logger:setup_logger:92 | req_id=- | user_id=- | Logger initialized | level=DEBUG | env=development | dir=logs
+2026-06-08 10:02:22.167 | INFO     | main:lifespan:40 | req_id=- | user_id=- | WorkPilot v2 starting | env=development
+2026-06-08 10:02:24.779 | INFO     | main:lifespan:43 | req_id=- | user_id=- | WorkPilot v2 shutting down
+2026-06-08 10:02:26.247 | INFO     | core.logger:setup_logger:92 | req_id=- | user_id=- | Logger initialized | level=DEBUG | env=development | dir=logs
+2026-06-08 10:02:26.248 | INFO     | main:lifespan:40 | req_id=- | user_id=- | WorkPilot v2 starting | env=development
+2026-06-08 10:02:29.622 | INFO     | main:lifespan:43 | req_id=- | user_id=- | WorkPilot v2 shutting down
+2026-06-08 10:02:31.056 | INFO     | core.logger:setup_logger:92 | req_id=- | user_id=- | Logger initialized | level=DEBUG | env=development | dir=logs
+2026-06-08 10:02:31.056 | INFO     | main:lifespan:40 | req_id=- | user_id=- | WorkPilot v2 starting | env=development
+2026-06-08 10:02:43.262 | INFO     | main:lifespan:43 | req_id=- | user_id=- | WorkPilot v2 shutting down
+2026-06-08 10:02:44.751 | INFO     | core.logger:setup_logger:92 | req_id=- | user_id=- | Logger initialized | level=DEBUG | env=development | dir=logs
+2026-06-08 10:02:44.751 | INFO     | main:lifespan:40 | req_id=- | user_id=- | WorkPilot v2 starting | env=development
+2026-06-08 10:21:07.615 | INFO     | main:lifespan:43 | req_id=- | user_id=- | WorkPilot v2 shutting down
+2026-06-08 10:21:24.725 | INFO     | core.logger:setup_logger:92 | req_id=- | user_id=- | Logger initialized | level=DEBUG | env=development | dir=logs
+2026-06-08 10:21:24.726 | INFO     | main:lifespan:40 | req_id=- | user_id=- | WorkPilot v2 starting | env=development
+2026-06-08 14:14:03.722 | INFO     | core.logger:setup_logger:92 | req_id=- | user_id=- | Logger initialized | level=DEBUG | env=development | dir=logs
+2026-06-08 14:14:03.722 | INFO     | main:lifespan:40 | req_id=- | user_id=- | WorkPilot v2 starting | env=development
+2026-06-08 14:14:09.692 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | GET /api/chat/conversations | client=127.0.0.1
+2026-06-08 14:14:09.913 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | GET /api/chat/conversations | client=127.0.0.1
+2026-06-08 14:14:12.148 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | GET /api/chat/conversations/7 | client=127.0.0.1
+2026-06-08 14:14:14.785 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | POST /api/chat/stream | client=127.0.0.1
+2026-06-08 14:14:14.954 | DEBUG    | graph.nodes:classify_intent_node:121 | req_id=- | user_id=- | [classify_intent] regex→chitchat | '你好'
+2026-06-08 14:14:14.954 | INFO     | services.llm_client:_ollama_stream:137 | req_id=- | user_id=- | LLM call | provider=ollama | model=qwen2.5:7b
+2026-06-08 14:14:27.369 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | GET /api/chat/conversations | client=127.0.0.1
+2026-06-08 14:15:00.440 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | POST /api/chat/stream | client=127.0.0.1
+2026-06-08 14:15:00.461 | INFO     | services.llm_client:_ollama_complete:58 | req_id=- | user_id=- | LLM call | provider=ollama (complete) | model=qwen2.5:7b
+2026-06-08 14:15:04.382 | DEBUG    | graph.nodes:classify_intent_node:142 | req_id=- | user_id=- | [classify_intent] chitchat | '给我输出100个a'
+2026-06-08 14:15:04.383 | INFO     | services.llm_client:_ollama_stream:137 | req_id=- | user_id=- | LLM call | provider=ollama | model=qwen2.5:7b
+2026-06-08 14:15:09.510 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | GET /api/chat/conversations | client=127.0.0.1
+2026-06-08 14:15:18.267 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | POST /api/chat/stream | client=127.0.0.1
+2026-06-08 14:15:18.290 | INFO     | services.llm_client:_ollama_complete:58 | req_id=- | user_id=- | LLM call | provider=ollama (complete) | model=qwen2.5:7b
+2026-06-08 14:15:22.036 | DEBUG    | graph.nodes:classify_intent_node:142 | req_id=- | user_id=- | [classify_intent] chitchat | '偷懒'
+2026-06-08 14:15:22.038 | INFO     | services.llm_client:_ollama_stream:137 | req_id=- | user_id=- | LLM call | provider=ollama | model=qwen2.5:7b
+2026-06-08 14:15:28.737 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | GET /api/chat/conversations | client=127.0.0.1
+2026-06-08 14:15:55.238 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | POST /api/chat/stream | client=127.0.0.1
+2026-06-08 14:15:55.259 | INFO     | services.llm_client:_ollama_complete:58 | req_id=- | user_id=- | LLM call | provider=ollama (complete) | model=qwen2.5:7b
+2026-06-08 14:15:59.306 | DEBUG    | graph.nodes:classify_intent_node:142 | req_id=- | user_id=- | [classify_intent] chitchat | '我要你输出100个a'
+2026-06-08 14:15:59.307 | INFO     | services.llm_client:_ollama_stream:137 | req_id=- | user_id=- | LLM call | provider=ollama | model=qwen2.5:7b
+2026-06-08 14:16:06.416 | INFO     | core.logger:__call__:147 | req_id=- | user_id=- | Request started | GET /api/chat/conversations | client=127.0.0.1

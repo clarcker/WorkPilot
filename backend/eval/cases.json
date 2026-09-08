@@ -1,0 +1,122 @@
+[
+  {
+    "id": "case_001",
+    "question": "报销住宿上限是多少？",
+    "expected_intent": "rag",
+    "expected_doc_keywords": ["报销", "住宿"],
+    "should_cite": true,
+    "description": "制度问答：报销住宿标准"
+  },
+  {
+    "id": "case_002",
+    "question": "请假需要提前几天申请？",
+    "expected_intent": "rag",
+    "expected_doc_keywords": ["请假"],
+    "should_cite": true,
+    "description": "制度问答：请假流程"
+  },
+  {
+    "id": "case_003",
+    "question": "你好",
+    "expected_intent": "chitchat",
+    "expected_doc_keywords": [],
+    "should_cite": false,
+    "description": "闲聊：问候"
+  },
+  {
+    "id": "case_004",
+    "question": "帮我查一下我的报销额度",
+    "expected_intent": "rag",
+    "expected_tool": "query_reimbursement_limit",
+    "should_cite": false,
+    "description": "工具调用：查报销额度"
+  },
+  {
+    "id": "case_005",
+    "question": "帮我查一下张三的员工信息",
+    "expected_intent": "rag",
+    "expected_tool": "query_employee_profile",
+    "should_cite": false,
+    "description": "工具调用：查员工信息"
+  },
+  {
+    "id": "case_006",
+    "question": "我的电脑连不上网了，帮我报修",
+    "expected_intent": "rag",
+    "expected_tool": "create_it_ticket",
+    "should_cite": false,
+    "description": "工具调用：创建 IT 工单"
+  },
+  {
+    "id": "case_007",
+    "question": "出差补贴怎么算？",
+    "expected_intent": "rag",
+    "expected_doc_keywords": ["出差", "补贴"],
+    "should_cite": true,
+    "description": "制度问答：出差补贴"
+  },
+  {
+    "id": "case_008",
+    "question": "今天天气怎么样？",
+    "expected_intent": "chitchat",
+    "expected_doc_keywords": [],
+    "should_cite": false,
+    "description": "闲聊：超出范围"
+  },
+  {
+    "id": "case_009",
+    "question": "公司的安全合规制度是什么？",
+    "expected_intent": "rag",
+    "expected_doc_keywords": ["安全", "合规"],
+    "should_cite": true,
+    "description": "制度问答：安全合规"
+  },
+  {
+    "id": "case_010",
+    "question": "设备维修怎么申请？",
+    "expected_intent": "rag",
+    "expected_doc_keywords": ["设备", "维修"],
+    "should_cite": true,
+    "description": "制度问答：设备维修"
+  },
+  {
+    "id": "case_011",
+    "question": "新员工入职需要做什么？",
+    "expected_intent": "rag",
+    "expected_doc_keywords": ["入职"],
+    "should_cite": true,
+    "description": "制度问答：入职指南"
+  },
+  {
+    "id": "case_012",
+    "question": "谢谢",
+    "expected_intent": "chitchat",
+    "expected_doc_keywords": [],
+    "should_cite": false,
+    "description": "闲聊：感谢"
+  },
+  {
+    "id": "case_013",
+    "question": "年假有几天？",
+    "expected_intent": "rag",
+    "expected_doc_keywords": ["年假"],
+    "should_cite": true,
+    "description": "制度问答：年假天数"
+  },
+  {
+    "id": "case_014",
+    "question": "帮我查一下通讯补贴剩余额度",
+    "expected_intent": "rag",
+    "expected_tool": "query_reimbursement_limit",
+    "should_cite": false,
+    "description": "工具调用：查通讯补贴"
+  },
+  {
+    "id": "case_015",
+    "question": "公司的考勤规则是什么？",
+    "expected_intent": "rag",
+    "expected_doc_keywords": ["考勤"],
+    "should_cite": true,
+    "description": "制度问答：考勤规则"
+  }
+]

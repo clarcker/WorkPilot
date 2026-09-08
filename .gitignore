@@ -1,0 +1,10 @@
+.claude
+.codegraph
+.env
+__pycache__/
+*.pyc
+.env
+**/venv/
+.idea/
+**/dist/
+**/node_modules/

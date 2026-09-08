@@ -1,0 +1,36 @@
+# 开发环境覆盖配置
+# docker compose up -d   （自动加载此文件）
+#
+# 与生产的区别：
+#   - backend 用热重载模式（fastapi dev）
+#   - backend/postgres/ollama/前端 端口对宿主机暴露，方便调试
+#   - backend 源码目录挂载进容器，改代码实时生效
+#   - 前端使用 vite dev server（http://localhost:5173），代理 /api 到后端
+#
+# 前端开发启动（宿主机执行，不在 Docker 内）：
+#   cd frontend && npm run dev
+
+services:
+
+  backend:
+    # 覆盖生产启动命令：使用 fastapi dev 热重载
+    command: uv run fastapi dev main.py --host 0.0.0.0 --port 8000
+    # 直接挂载源码目录（无需重新 build 镜像）
+    volumes:
+      - ./backend:/app
+      - uploads:/data/uploads
+    ports:
+      - "8000:8000"   # 开发时直连后端 / Vite proxy 目标
+    # 开发模式下禁用健康检查（fastapi dev 启动更快）
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      start_period: 10s
+      interval: 10s
+
+  postgres:
+    ports:
+      - "5433:5432"   # 5432 被 Docker Desktop 占用，用 5433 代替
+
+  ollama:
+    ports:
+      - "11434:11434"  # 方便本地直接调用 Ollama API

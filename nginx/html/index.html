@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WorkPilot v2</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh;
+      background: #f0f2f5;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .card {
+      background: #fff; border-radius: 12px;
+      padding: 48px 56px; text-align: center;
+      box-shadow: 0 4px 24px rgba(0,0,0,.08);
+      max-width: 480px; width: 90%;
+    }
+    .logo { font-size: 48px; margin-bottom: 16px; }
+    h1 { font-size: 28px; color: #1a1a1a; margin-bottom: 8px; }
+    p  { color: #666; font-size: 15px; line-height: 1.6; margin-bottom: 24px; }
+    .badge {
+      display: inline-block; padding: 4px 12px;
+      background: #e6f4ff; color: #1677ff;
+      border-radius: 20px; font-size: 13px; font-weight: 500;
+    }
+    .api-link {
+      display: block; margin-top: 24px;
+      color: #1677ff; text-decoration: none; font-size: 14px;
+    }
+    .api-link:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">🤖</div>
+    <h1>WorkPilot v2</h1>
+    <p>企业智能 Agent 系统<br>前端正在构建中，后端 API 已就绪。</p>
+    <span class="badge">Backend Running</span>
+    <a class="api-link" href="/docs">→ 查看 API 文档（Swagger UI）</a>
+  </div>
+</body>
+</html>
