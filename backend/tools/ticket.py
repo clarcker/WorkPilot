@@ -9,9 +9,27 @@ from tools.base import ToolContext, ToolResult, make_idempotency_key, tool
 
 @tool(
     name="create_it_ticket",
-    description="创建 IT 支持工单。需要问题类型（网络故障/打印机故障/账号问题/软件安装/其他）和问题描述。重复提交返回已有工单。",
+    description=(
+        "为当前用户创建 IT 支持工单。仅在用户明确要求报修/报障/提交工单时调用；"
+        "只是询问维修流程或制度规定时不要调用。重复提交返回已有工单。"
+    ),
     permissions=["employee", "dept_admin", "super_admin"],
     is_idempotent=True,
+    parameters={
+        "type": "object",
+        "properties": {
+            "issue_type": {
+                "type": "string",
+                "enum": ["网络故障", "打印机故障", "账号问题", "软件安装", "其他"],
+                "description": "问题类型",
+            },
+            "description": {
+                "type": "string",
+                "description": "问题的具体描述",
+            },
+        },
+        "required": ["issue_type", "description"],
+    },
 )
 async def create_it_ticket(args: dict, ctx: ToolContext) -> ToolResult:
     issue_type = args.get("issue_type", "")
@@ -22,6 +40,12 @@ async def create_it_ticket(args: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult(success=False, error="问题描述不能为空")
 
     idem_key = make_idempotency_key(ctx.user_id, issue_type=issue_type.strip(), description=description.strip())
+
+    if ctx.dry_run:
+        # 演练模式（评测回归）：参数已校验通过，但不落库
+        return ToolResult(success=True, data={
+            "ticket_no": f"IT-DRYRUN-{idem_key[:8]}", "status": "dry_run",
+            "message": "演练模式：工单未真正创建", "created_at": None})
 
     async with async_session_factory() as db:
         existing = await db.scalar(select(ItTicket).where(ItTicket.idempotency_key == idem_key))

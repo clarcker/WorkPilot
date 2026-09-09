@@ -16,6 +16,32 @@ from core.config import settings
 from core.logger import logger
 
 
+def _complete_timeout() -> httpx.Timeout:
+    """非流式调用：建连要快，读取要容忍慢机器上的 prefill。"""
+    return httpx.Timeout(
+        connect=settings.llm_connect_timeout,
+        read=settings.llm_complete_timeout,
+        write=settings.llm_connect_timeout,
+        pool=settings.llm_connect_timeout,
+    )
+
+
+def _stream_timeout() -> httpx.Timeout:
+    """
+    流式调用：read 是"两次数据之间的最大间隔"，而不是整体耗时上限。
+
+    首个 token 之前的 prefill 全部算在这一个间隔里——纯 CPU 上带上下文的
+    7B 模型经常超过 120s，之前就是在这里被误杀成一个内容为空的
+    httpx.ReadTimeout，日志里只留下一句"模型调用失败："。
+    """
+    return httpx.Timeout(
+        connect=settings.llm_connect_timeout,
+        read=settings.llm_stream_timeout,
+        write=settings.llm_connect_timeout,
+        pool=settings.llm_connect_timeout,
+    )
+
+
 async def chat_complete(
     messages: list[dict],
     temperature: float = 0.3,
@@ -56,7 +82,7 @@ async def _ollama_complete(
         "options": {"temperature": temperature, "num_predict": max_tokens},
     }
     logger.info("LLM call | provider=ollama (complete) | model={model}", model=settings.ollama_chat_model)
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=_complete_timeout()) as client:
         resp = await client.post(url, json=payload)
         resp.raise_for_status()
         data = resp.json()
@@ -82,7 +108,7 @@ async def _openai_complete(
         "max_tokens": max_tokens,
     }
     logger.info("LLM call | provider=openai_compatible (complete) | model={model}", model=settings.openai_model)
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=_complete_timeout()) as client:
         resp = await client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
         data = resp.json()
@@ -136,7 +162,7 @@ async def _ollama_stream(
 
     logger.info("LLM call | provider=ollama | model={model}", model=settings.ollama_chat_model)
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=_stream_timeout()) as client:
         async with client.stream("POST", url, json=payload) as response:
             response.raise_for_status()
             async for raw_line in response.aiter_lines():
@@ -176,7 +202,7 @@ async def _openai_stream(
 
     logger.info("LLM call | provider=openai_compatible | model={model}", model=settings.openai_model)
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=_stream_timeout()) as client:
         async with client.stream("POST", url, json=payload, headers=headers) as response:
             response.raise_for_status()
             async for raw_line in response.aiter_lines():

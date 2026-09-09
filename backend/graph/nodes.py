@@ -19,6 +19,17 @@ import time
 
 from core.logger import logger
 from graph.state import RAGState
+
+
+def describe_exc(exc: BaseException) -> str:
+    """
+    异常的可读描述。
+
+    httpx.ReadTimeout / asyncio.TimeoutError 的 str() 都是空字符串，
+    直接拼进消息里会得到"模型调用失败："这种没有任何信息的报错。
+    """
+    msg = str(exc).strip()
+    return f"{type(exc).__name__}: {msg}" if msg else type(exc).__name__
 from services.embedder import get_embedding
 from services.llm_client import chat_complete, chat_stream
 from services.retriever import retrieve
@@ -96,6 +107,8 @@ def _classify_by_keywords(query: str) -> str:
         "制度", "规范", "流程", "政策", "规定", "规则",
         "报销", "请假", "考勤", "薪资", "工资", "福利",
         "培训", "安全", "合规", "文档", "手册", "指南",
+        "入职", "离职", "转正", "出差", "年假", "补贴", "额度",
+        "设备", "电脑", "网络", "报修", "维修", "工单", "权限",
         "怎么", "如何", "什么", "哪些", "多少", "几天",
         "可以", "能", "需要", "必须", "应该",
         "公司", "部门", "员工", "领导", "管理",
@@ -127,8 +140,12 @@ async def classify_intent_node(state: RAGState) -> dict:
             "role": "system",
             "content": (
                 "判断用户输入的类型，只回复一个词：\n"
-                "- 日常闲聊、问候、寒暄 → chitchat\n"
-                "- 涉及公司制度、报销、请假、考勤、薪资、流程、政策、文档 → rag"
+                "- 纯粹的日常闲聊、问候、寒暄、与公司无关的话题 → chitchat\n"
+                "- 涉及公司制度、流程、政策、文档，或需要办理某项业务 → rag\n"
+                "  （包括但不限于：报销、请假、考勤、年假、薪资、福利、入职、"
+                "离职、转正、培训、出差、IT/设备/网络、报修、工单、"
+                "安全、合规、权限申请）\n"
+                "只要问题与公司内部事务相关，一律回 rag。"
             ),
         },
         {"role": "user", "content": query},
@@ -137,7 +154,7 @@ async def classify_intent_node(state: RAGState) -> dict:
         answer = await chat_complete(messages, temperature=0, max_tokens=5)
         intent = "rag" if "rag" in answer.lower() else "chitchat"
     except Exception as exc:
-        logger.warning(f"[classify_intent] LLM失败，降级关键词匹配: {exc}")
+        logger.warning(f"[classify_intent] LLM失败，降级关键词匹配: {describe_exc(exc)}")
         intent = _classify_by_keywords(query)
 
     logger.debug(f"[classify_intent] {intent} | {query[:50]!r}")
@@ -186,8 +203,8 @@ async def retrieve_docs_node(state: RAGState) -> dict:
 
         return {"retrieved_chunks": chunk_dicts}
     except Exception as exc:
-        logger.error(f"[retrieve_docs] 检索失败: {exc}", exc_info=True)
-        return {"retrieved_chunks": [], "error": f"检索失败: {exc}"}
+        logger.error(f"[retrieve_docs] 检索失败: {describe_exc(exc)}", exc_info=True)
+        return {"retrieved_chunks": [], "error": f"检索失败: {describe_exc(exc)}"}
 
 
 # ══════════════════════════════════════════════
@@ -251,6 +268,15 @@ async def generate_answer_node(state: RAGState) -> dict:
     history = state.get("conversation_history", [])
     queue   = state.get("token_queue")
 
+    # 评测回归只看 intent / sources / tool_name，不需要答案正文。
+    # 生成是整条链路最慢的一步（CPU 上 7B 模型 ~100s/条），跳过可把
+    # 单条耗时从 ~100s 降到几秒，避免评测被自身超时判失败。
+    if state.get("skip_generation"):
+        sources = _build_sources(chunks)
+        if queue:
+            await queue.put(None)
+        return {"full_answer": "", "sources": sources}
+
     context    = _build_context(chunks)
     system_msg = _RAG_SYSTEM_PROMPT.format(context=context)
     sources    = _build_sources(chunks)
@@ -260,19 +286,23 @@ async def generate_answer_node(state: RAGState) -> dict:
         messages.append({"role": h["role"], "content": h["content"]})
     messages.append({"role": "user", "content": state["anonymized_query"] or state["query"]})
 
+    max_tokens = state.get("gen_max_tokens") or 2048
     full_answer = ""
     try:
-        async for token in chat_stream(messages, temperature=0.3, max_tokens=2048):
+        async for token in chat_stream(messages, temperature=0.3, max_tokens=max_tokens):
             full_answer += token
             if queue:
                 await queue.put({"type": "token", "content": token})
     except Exception as exc:
-        error_msg = f"模型调用失败：{exc}"
+        error_msg = f"模型调用失败：{describe_exc(exc)}"
         logger.error(f"[generate_answer] {error_msg}")
         if queue:
             await queue.put({"type": "error", "content": error_msg})
             await queue.put(None)
-        return {"full_answer": "", "sources": [], "error": error_msg}
+        # 检索此时已经成功了，sources 必须保留：
+        # 前端已经收到过 sources 事件，清空会让引用面板凭空消失；
+        # 评测里 doc_hit 是检索指标，被生成失败连坐会得出错误结论。
+        return {"full_answer": full_answer, "sources": sources, "error": error_msg}
 
     logger.debug(f"[generate_answer] 生成完毕，{len(full_answer)} 字符")
     if queue:
@@ -294,6 +324,12 @@ _CHITCHAT_SYSTEM = (
 async def generate_chitchat_node(state: RAGState) -> dict:
     """直接调用 LLM 处理闲聊，流式推送 token。"""
     queue = state.get("token_queue")
+
+    if state.get("skip_generation"):
+        if queue:
+            await queue.put(None)
+        return {"full_answer": "", "sources": []}
+
     messages = [
         {"role": "system", "content": _CHITCHAT_SYSTEM},
         {"role": "user",   "content": state["query"]},
@@ -305,7 +341,7 @@ async def generate_chitchat_node(state: RAGState) -> dict:
             if queue:
                 await queue.put({"type": "token", "content": token})
     except Exception as exc:
-        error_msg = f"模型调用失败：{exc}"
+        error_msg = f"模型调用失败：{describe_exc(exc)}"
         logger.error(f"[generate_chitchat] {error_msg}")
         if queue:
             await queue.put({"type": "error", "content": error_msg})
@@ -337,11 +373,40 @@ _TOOL_DECISION_PROMPT = """\
 {tools_desc}
 
 规则：
-- 如果用户问题需要查询员工信息、报销额度或创建工单，回复需要调用的工具名和参数
-- 如果只是制度问答（如"报销制度是什么"），不需要调用工具
+- 用户要求查询自己的具体数据（员工信息、报销额度）或要求办理业务（报修、提工单）时，才调用工具
+- 只是询问制度/流程/规定（如"报销制度是什么"、"设备维修怎么申请"），不要调用工具
+- tool_args 的键必须严格使用上面列出的英文参数名，不要翻译成中文，不要自创参数名
+- 必填参数无法从用户问题中确定时，不要调用该工具
 - 回复 JSON：{{"need_tool": true, "tool_name": "xxx", "tool_args": {{...}}}} 或 {{"need_tool": false}}
 
 只回复 JSON。"""
+
+
+def _format_tool_for_prompt(t: dict) -> str:
+    """把工具的 JSON Schema 渲染成 LLM 可读的参数说明。
+
+    参数名必须出现在提示词里，否则模型会自己编键名（曾生成 {"问题类型": ...}
+    而工具读的是 args["issue_type"]，导致工单永远创建失败）。
+    """
+    schema = t.get("parameters") or {}
+    props = schema.get("properties") or {}
+    required = set(schema.get("required") or [])
+
+    if not props:
+        params_desc = "无参数"
+    else:
+        lines = []
+        for k, v in props.items():
+            bits = [v.get("type", "string")]
+            bits.append("必填" if k in required else "可选")
+            if v.get("enum"):
+                bits.append("取值: " + "/".join(str(e) for e in v["enum"]))
+            if v.get("description"):
+                bits.append(v["description"])
+            lines.append(f"    - {k} ({', '.join(bits)})")
+        params_desc = "\n" + "\n".join(lines)
+
+    return f"- {t['name']}: {t['description']}\n  参数：{params_desc}"
 
 
 async def decide_tool_node(state: RAGState) -> dict:
@@ -353,9 +418,7 @@ async def decide_tool_node(state: RAGState) -> dict:
 
     tools_desc_parts = []
     for t in tool_registry.get_tools_for_prompt(state.get("user_role", "employee")):
-        params_desc = ", ".join(f"{k}: {v.get('type', 'string')}"
-                                for k, v in t.get("parameters", {}).get("properties", {}).items())
-        tools_desc_parts.append(f"- {t['name']}: {t['description']}（参数: {params_desc}）")
+        tools_desc_parts.append(_format_tool_for_prompt(t))
 
     if not tools_desc_parts:
         return {"need_tool": False}
@@ -380,7 +443,7 @@ async def decide_tool_node(state: RAGState) -> dict:
             return {"need_tool": True, "tool_name": tool_name, "tool_args": tool_args}
         return {"need_tool": False}
     except Exception as exc:
-        logger.warning(f"[decide_tool] 解析失败: {exc}")
+        logger.warning(f"[decide_tool] 解析失败: {describe_exc(exc)}")
         return {"need_tool": False}
 
 
@@ -396,10 +459,11 @@ async def execute_tool_node(state: RAGState) -> dict:
     queue = state.get("token_queue")
 
     if not tool_name:
-        return {"tool_result": None}
+        return {"tool_result": None, "tool_success": None, "tool_error": None}
 
     ctx = ToolContext(user_id=state["user_id"], user_role=state.get("user_role", "employee"),
-                     user_dept_id=state.get("user_dept_id"))
+                     user_dept_id=state.get("user_dept_id"),
+                     dry_run=bool(state.get("tool_dry_run")))
 
     start = time.time()
     result = await tool_registry.execute(tool_name, tool_args, ctx)
@@ -414,9 +478,12 @@ async def execute_tool_node(state: RAGState) -> dict:
             "error": result.error, "latency_ms": latency_ms}})
 
     if result.success:
-        return {"tool_result": result.data}
-    return {"tool_result": None, "error": result.error or result.deny_reason,
-            "permission_denied": result.deny_reason}
+        return {"tool_result": result.data, "tool_success": True, "tool_error": None}
+
+    reason = result.error or result.deny_reason
+    logger.warning(f"[execute_tool] {tool_name} 执行失败: {reason} | args={tool_args}")
+    return {"tool_result": None, "tool_success": False, "tool_error": reason,
+            "error": reason, "permission_denied": result.deny_reason}
 
 
 def route_after_decide_tool(state: RAGState) -> str:

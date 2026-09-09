@@ -20,11 +20,27 @@ _MOCK_EMPLOYEES = {
 
 @tool(
     name="query_employee_profile",
-    description="查询员工基本信息，包括姓名、部门、职位、工号、邮箱、入职日期等。只能查询自己的信息。",
+    description=(
+        "查询员工基本信息（姓名、部门、职位、工号、邮箱、入职日期）。"
+        "不传 user_id 时查询当前登录用户自己；普通员工只能查自己，"
+        "部门管理员和超级管理员可传 user_id 查询他人。"
+    ),
     permissions=["employee", "dept_admin", "super_admin"],
+    parameters={
+        "type": "object",
+        "properties": {
+            "user_id": {
+                "type": "integer",
+                "description": "要查询的员工 user_id；省略则查询当前登录用户自己",
+            },
+        },
+    },
 )
 async def query_employee_profile(args: dict, ctx: ToolContext) -> ToolResult:
-    target_user_id = args.get("user_id", ctx.user_id)
+    # 不能用 args.get("user_id", ctx.user_id)：LLM 常常显式给出 "user_id": null，
+    # 键存在时默认值不生效，会把 None 当成目标用户传下去
+    _uid = args.get("user_id")
+    target_user_id = ctx.user_id if _uid in (None, "") else _uid
     if ctx.user_role == "employee" and target_user_id != ctx.user_id:
         return ToolResult(success=False, deny_reason="普通员工只能查询自己的信息")
     employee = _MOCK_EMPLOYEES.get(target_user_id)

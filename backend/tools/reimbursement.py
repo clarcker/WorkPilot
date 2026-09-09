@@ -23,11 +23,32 @@ _MOCK_LIMITS = {
 
 @tool(
     name="query_reimbursement_limit",
-    description="查询员工各类报销额度，包括年度上限、已用金额、剩余额度。可指定类别（差旅住宿/交通补贴/餐饮补贴/通讯补贴）。只能查自己的。",
+    description=(
+        "查询员工的报销额度（年度上限、已用金额、剩余额度）。"
+        "不传 category 时返回全部类别；不传 user_id 时查询当前登录用户自己。"
+        "普通员工只能查自己。"
+    ),
     permissions=["employee", "dept_admin", "super_admin"],
+    parameters={
+        "type": "object",
+        "properties": {
+            "category": {
+                "type": "string",
+                "enum": ["差旅住宿", "交通补贴", "餐饮补贴", "通讯补贴"],
+                "description": "报销类别；省略则返回全部类别",
+            },
+            "user_id": {
+                "type": "integer",
+                "description": "要查询的员工 user_id；省略则查询当前登录用户自己",
+            },
+        },
+    },
 )
 async def query_reimbursement_limit(args: dict, ctx: ToolContext) -> ToolResult:
-    target_user_id = args.get("user_id", ctx.user_id)
+    # 不能用 args.get("user_id", ctx.user_id)：LLM 常常显式给出 "user_id": null，
+    # 键存在时默认值不生效，会把 None 当成目标用户传下去
+    _uid = args.get("user_id")
+    target_user_id = ctx.user_id if _uid in (None, "") else _uid
     category = args.get("category")
     if ctx.user_role == "employee" and target_user_id != ctx.user_id:
         return ToolResult(success=False, deny_reason="普通员工只能查询自己的报销额度")

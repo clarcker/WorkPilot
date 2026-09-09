@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     ollama_embed_model: str = "nomic-embed-text"
     ollama_chat_model: str = "qwen2.5:7b"
 
+    # LLM 超时（秒）。httpx 的 read 超时语义是"两次数据之间的最大间隔"，
+    # 首个 token 之前的 prompt 预处理（prefill）也算在这个间隔里。
+    # 7B 模型跑在纯 CPU 上时，带 5 个检索片段的 prefill 可能超过 120s，
+    # 会在一个 token 都没吐出来之前被掐断，所以 read 要给得比直觉宽。
+    llm_connect_timeout: float = 10.0     # 建连
+    llm_complete_timeout: float = 120.0   # 非流式（意图分类 / 工具决策）
+    llm_stream_timeout: float = 300.0     # 流式生成的 read 间隔上限
+
     # OpenAI 兼容 API 配置（DeepSeek、Qwen-Max、vLLM 等）
     openai_api_key: str = ""
     openai_base_url: str = "https://api.deepseek.com/v1"
