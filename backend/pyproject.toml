@@ -35,6 +35,7 @@ dependencies = [
     "rapidocr-onnxruntime>=1.4.4",
     "pypdfium2>=5.9.0",
     "pyyaml>=6.0.3",
+    "jieba>=0.42.1",
 ]
 
 [project.optional-dependencies]

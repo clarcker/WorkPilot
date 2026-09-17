@@ -1,4 +1,4 @@
-"""create_it_ticket 工具 — 创建 IT 工单（mock + 幂等）。"""
+"""create_it_ticket / query_my_tickets 工具。"""
 from __future__ import annotations
 import time
 from sqlalchemy import select
@@ -63,3 +63,46 @@ async def create_it_ticket(args: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult(success=True, data={
             "ticket_no": ticket.ticket_no, "status": "open",
             "message": "工单创建成功，IT 部门将尽快处理", "created_at": ticket.created_at.isoformat()})
+
+
+@tool(
+    name="query_my_tickets",
+    description=(
+        "查询当前用户自己的 IT 工单进度。"
+        "用户问「我上次报的打印机修好了吗 / 工单处理得怎么样了」时调用。"
+        "可按状态过滤：open/in_progress/closed。"
+    ),
+    permissions=["employee", "dept_admin", "super_admin"],
+    parameters={
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": ["open", "in_progress", "closed"],
+                "description": "按状态过滤，可选",
+            },
+        },
+    },
+)
+async def query_my_tickets(args: dict, ctx: ToolContext) -> ToolResult:
+    status = args.get("status")
+    async with async_session_factory() as db:
+        q = select(ItTicket).where(ItTicket.user_id == ctx.user_id)
+        if status:
+            q = q.where(ItTicket.status == status)
+        rows = (
+            await db.execute(q.order_by(ItTicket.created_at.desc()).limit(10))
+        ).scalars().all()
+
+    items = [
+        {
+            "ticket_no": t.ticket_no,
+            "issue_type": t.issue_type,
+            "description": t.description,
+            "status": t.status,
+            "handle_note": t.handle_note,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+        }
+        for t in rows
+    ]
+    return ToolResult(success=True, data={"count": len(items), "items": items})

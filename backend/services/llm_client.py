@@ -16,6 +16,7 @@ from typing import AsyncIterator
 
 import httpx
 
+from core.anonymizer import anonymize_messages
 from core.config import maybe_reload_settings, settings
 from core.logger import logger
 
@@ -66,6 +67,19 @@ def _stream_timeout() -> httpx.Timeout:
     )
 
 
+def _prepare_outbound(
+    messages: list[dict],
+    provider: str,
+) -> list[dict]:
+    """
+    出网前统一处理。仅外部 API 脱敏；本地 Ollama 不出网，保留原文。
+    这是所有 LLM 调用的唯一脱敏出口（R0）。
+    """
+    if provider == "openai_compatible":
+        return anonymize_messages(messages)
+    return messages
+
+
 async def chat_complete(
     messages: list[dict],
     temperature: float = 0.3,
@@ -85,6 +99,7 @@ async def chat_complete(
         模型生成的完整文本
     """
     provider = resolve_provider(user_role)
+    messages = _prepare_outbound(messages, provider)
 
     if provider == "ollama":
         return await _ollama_complete(messages, temperature, max_tokens)
@@ -166,6 +181,7 @@ async def chat_stream(
         模型生成的 token 字符串
     """
     provider = resolve_provider(user_role)
+    messages = _prepare_outbound(messages, provider)
 
     if provider == "ollama":
         async for token in _ollama_stream(messages, temperature, max_tokens):

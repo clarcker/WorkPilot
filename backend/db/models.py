@@ -13,7 +13,7 @@ from sqlalchemy import (
     BigInteger, Boolean, DateTime, Enum, Float, ForeignKey,
     Index, Integer, String, Text, func,
 )
-from sqlalchemy.dialects.postgresql import INET, JSONB, UUID
+from sqlalchemy.dialects.postgresql import INET, JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
 
@@ -225,6 +225,8 @@ class DocChunk(Base):
     page_no:     Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     heading:     Mapped[Optional[str]] = mapped_column(Text,    nullable=True)
     token_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # R3：jieba 分词后的全文检索向量（应用层写入）
+    content_tsv: Mapped[Optional[str]] = mapped_column(TSVECTOR, nullable=True)
     created_at:  Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -421,6 +423,8 @@ class ItTicket(Base):
     issue_type:    Mapped[str]           = mapped_column(String(100), nullable=False)
     description:   Mapped[str]           = mapped_column(Text, nullable=False)
     status:        Mapped[str]           = mapped_column(String(20), nullable=False, default="open")
+    handle_note:   Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    handler_id:    Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     idempotency_key: Mapped[str]         = mapped_column(String(255), nullable=False, unique=True)
     created_at:    Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -566,3 +570,34 @@ class QARecord(Base):
         Index("idx_qa_user_created", "user_id", "created_at"),
         Index("idx_qa_gap", "is_gap", "gap_resolved"),
     )
+
+
+# =============================================
+# eval_runs（评测结果落库，P1）
+# =============================================
+
+class EvalRun(Base):
+    __tablename__ = "eval_runs"
+
+    id:               Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    started_at:       Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    finished_at:      Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    total_cases:      Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    scored_cases:     Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    timeout_count:    Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    intent_accuracy:  Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    doc_hit_rate:     Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    tool_call_accuracy: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    citation_rate:    Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    permission_pass_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    avg_latency_ms:   Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    skip_generation:  Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    tool_dry_run:     Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    case_results:     Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    failed_cases:     Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    operator_id:      Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    note:             Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

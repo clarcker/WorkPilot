@@ -96,6 +96,11 @@ class Settings(BaseSettings):
     llm_stream_timeout: float = 300.0
     tool_timeout: float = 15.0
 
+    # 检索（R2/R3）
+    retrieval_top_k: int = 5
+    retrieval_min_score: float = 0.3
+    retrieval_enable_fts: bool = True
+
     upload_dir: str = "/data/uploads"
     max_file_size_mb: int = 200
     login_max_fail_count: int = 5

@@ -36,45 +36,15 @@ from services.retriever import retrieve
 
 
 # ══════════════════════════════════════════════
-#  1. 脱敏节点
+#  1. 脱敏节点（仅产出 anonymized_query 供 trace；真正脱敏在 llm_client 出口）
 # ══════════════════════════════════════════════
 
-# PII 替换规则：(regex, 替换标签)
-# 顺序敏感：长模式（JWT、银行卡）放在短模式（手机号）之前，避免误截断
-_PII_RULES: list[tuple[str, str]] = [
-    # ── 令牌 / 密钥 ────────────────────────────────────
-    # JWT（三段 base64url，点分隔）
-    (r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}", "[JWT令牌]"),
-    # OpenAI / Anthropic 风格 sk- 密钥
-    (r"sk-[A-Za-z0-9]{20,}", "[API密钥]"),
-    # GitHub 个人/Actions 令牌
-    (r"gh[pors]_[A-Za-z0-9]{36,}", "[GitHub令牌]"),
-    # 阿里云 / 腾讯云 AccessKeyId
-    (r"AKID[A-Za-z0-9]{13,}", "[云服务密钥]"),
-    # 配置行：api_key=xxx  secret_key: xxx  access_token=xxx
-    (r"(?i)(api[_-]?key|secret[_-]?key|access[_-]?token|private[_-]?key)\s*[:=]\s*[\"']?[A-Za-z0-9_\-\.]{8,}[\"']?",
-     "[密钥配置]"),
-    # 配置行：password=xxx  passwd: xxx
-    (r"(?i)(password|passwd)\s*[:=]\s*[\"']?\S{4,}[\"']?", "[密码配置]"),
-
-    # ── 个人身份信息 ────────────────────────────────────
-    # 身份证（18位，含X结尾）放在手机号之前避免前缀被截断
-    (r"\d{17}[\dXx]",         "[身份证]"),
-    # 银行卡（16-19位，可含空格或连字符）
-    (r"\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}([- ]?\d{1,3})?", "[银行卡]"),
-    # 手机号（大陆 1[3-9]xxxxxxxxx）
-    (r"1[3-9]\d{9}",          "[手机号]"),
-    # 邮箱
-    (r"[\w.+-]+@[\w-]+\.\w+", "[邮箱]"),
-]
+from core.anonymizer import anonymize_text
 
 
 async def anonymize_node(state: RAGState) -> dict:
-    """将查询中的 PII / 密钥替换为占位符，再传给 LLM。"""
-    text = state["query"]
-    for pattern, label in _PII_RULES:
-        text = re.sub(pattern, label, text)
-    return {"anonymized_query": text}
+    """记录脱敏后的 query（trace 用）。出网脱敏由 llm_client._prepare_outbound 统一处理。"""
+    return {"anonymized_query": anonymize_text(state["query"])}
 
 
 # ══════════════════════════════════════════════
@@ -120,48 +90,82 @@ def _classify_by_keywords(query: str) -> str:
     return "chitchat" if len(q) < 5 else "rag"
 
 
-async def classify_intent_node(state: RAGState) -> dict:
+async def query_understand_node(state: RAGState) -> dict:
     """
-    仅分析当前这一轮 query，判断 rag / chitchat。
+    R1：一次调用输出 intent + rewrite_query，替代 classify_intent 与 retrieve 内的改写。
 
-    策略：
-      1. 正则快速匹配明显闲聊（无 LLM 调用）
-      2. 其余情况用 LLM 单轮分类（不传历史，保持低延迟）
-      3. LLM 失败时降级为关键词匹配
+    正则快速通道保留；JSON 失败降级：intent 用关键词，rewrite 用原 query。
+    无历史时只分类，rewrite=原 query。
     """
-    query = state["query"]   # 并行执行，此时 anonymized_query 未必已写入，直接用原始 query
+    query = state["query"]
+    history = state.get("conversation_history") or []
+    user_role = state.get("user_role")
+    node_steps = list(state.get("node_steps") or [])
 
     if _is_obvious_chitchat(query):
-        logger.debug(f"[classify_intent] regex→chitchat | {query[:50]!r}")
-        return {"intent": "chitchat"}
+        return {
+            "intent": "chitchat",
+            "rewritten_query": query,
+            "node_steps": node_steps + [{
+                "node": "query_understand",
+                "output_summary": "regex→chitchat",
+                "latency_ms": 0,
+            }],
+        }
 
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "判断用户输入的类型，只回复一个词：\n"
-                "- 纯粹的日常闲聊、问候、寒暄、与公司无关的话题 → chitchat\n"
-                "- 涉及公司制度、流程、政策、文档，或需要办理某项业务 → rag\n"
-                "  （包括但不限于：报销、请假、考勤、年假、薪资、福利、入职、"
-                "离职、转正、培训、出差、IT/设备/网络、报修、工单、"
-                "安全、合规、权限申请）\n"
-                "只要问题与公司内部事务相关，一律回 rag。"
-            ),
-        },
-        {"role": "user", "content": query},
-    ]
+    hist_text = ""
+    if history:
+        hist_text = "\n".join(f"{h['role']}: {h['content']}" for h in history[-4:])
+
+    import json as _json
+
+    system = (
+        "你是企业助手的查询理解模块。根据用户最新问题输出 JSON：\n"
+        '{"intent": "rag" 或 "chitchat", "rewrite_query": "可独立检索的完整问题"}\n\n'
+        "规则：\n"
+        "- intent=chitchat：纯日常闲聊/问候/与公司无关\n"
+        "- intent=rag：公司制度、流程、业务办理（报销/请假/IT/工单等）\n"
+        "- rewrite_query：若有对话历史，把指代补全；无历史或问题已完整则原样输出\n"
+        "只输出 JSON，不要解释。"
+    )
+    user_content = f"对话历史：\n{hist_text or '（无）'}\n\n最新问题：{query}"
+
+    t0 = time.time()
+    intent = _classify_by_keywords(query)
+    rewritten = query
     try:
-        answer = await chat_complete(
-            messages, temperature=0, max_tokens=5,
-            user_role=state.get("user_role"),
+        raw = await chat_complete(
+            [{"role": "system", "content": system}, {"role": "user", "content": user_content}],
+            temperature=0, max_tokens=160, user_role=user_role,
         )
-        intent = "rag" if "rag" in answer.lower() else "chitchat"
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        data = _json.loads(raw)
+        if data.get("intent") in ("rag", "chitchat"):
+            intent = data["intent"]
+        rq = (data.get("rewrite_query") or "").strip().strip('"')
+        if 2 <= len(rq) <= 200:
+            rewritten = rq
     except Exception as exc:
-        logger.warning(f"[classify_intent] LLM失败，降级关键词匹配: {describe_exc(exc)}")
-        intent = _classify_by_keywords(query)
+        logger.warning(f"[query_understand] 解析失败，降级: {describe_exc(exc)}")
 
-    logger.debug(f"[classify_intent] {intent} | {query[:50]!r}")
-    return {"intent": intent}
+    latency = int((time.time() - t0) * 1000)
+    node_steps.append({
+        "node": "query_understand",
+        "output_summary": f"intent={intent} rewrite={rewritten[:60]!r}",
+        "latency_ms": latency,
+    })
+    logger.debug(f"[query_understand] {intent} | rewrite={rewritten[:60]!r}")
+    return {
+        "intent": intent,
+        "rewritten_query": rewritten,
+        "node_steps": node_steps,
+    }
+
+
+# 兼容旧图名
+classify_intent_node = query_understand_node
 
 
 # ══════════════════════════════════════════════
@@ -169,7 +173,7 @@ async def classify_intent_node(state: RAGState) -> dict:
 # ══════════════════════════════════════════════
 
 async def sync_node(state: RAGState) -> dict:
-    """等待 anonymize 和 classify_intent 均完成后的汇聚点，不修改状态。"""
+    """等待 anonymize 和 query_understand 均完成后的汇聚点，不修改状态。"""
     return {}
 
 
@@ -177,7 +181,7 @@ async def sync_node(state: RAGState) -> dict:
 #  4. 检索节点
 # ══════════════════════════════════════════════
 
-async def _rewrite_query(query: str, history: list) -> str:
+async def _rewrite_query(query: str, history: list, user_role: str | None = None) -> str:
     """多轮追问改写：把「那出差补贴呢」补全成语义完整问题。失败降级原 query。"""
     if not history:
         return query
@@ -194,8 +198,7 @@ async def _rewrite_query(query: str, history: list) -> str:
     ]
     try:
         rewritten = await chat_complete(
-            messages, temperature=0, max_tokens=80,
-            user_role=None,  # 改写用本地/默认即可，降低外部成本
+            messages, temperature=0, max_tokens=80, user_role=user_role,
         )
         rewritten = (rewritten or "").strip().strip('"')
         if 2 <= len(rewritten) <= 200:
@@ -207,28 +210,25 @@ async def _rewrite_query(query: str, history: list) -> str:
 
 async def retrieve_docs_node(state: RAGState) -> dict:
     """
-    用原始/改写后的 query 向量化检索（脱敏会伤召回）。
-    脱敏仅在调用外部 LLM 时使用，见 llm_query_for_completion。
-    检索完成后立即通过 SSE 推送 sources 给前端。
+    用 query_understand 产出的 rewritten_query 做混合检索（向量 + 关键词 RRF）。
+    检索完成后立即通过 SSE 推送 sources。
     """
     query = state["query"]
-    history = state.get("conversation_history") or []
+    rewritten = state.get("rewritten_query") or query
     queue = state.get("token_queue")
     node_steps = list(state.get("node_steps") or [])
 
     t0 = time.time()
-    rewritten = await _rewrite_query(query, history)
     embed_text = rewritten or query
 
     try:
         query_vec = await get_embedding(embed_text)
         chunks = await retrieve(
             query_embedding=query_vec,
+            query_text=embed_text,
             user_id=state["user_id"],
             user_dept_id=state["user_dept_id"],
             user_role=state["user_role"],
-            top_k=5,
-            min_score=0.3,
         )
         logger.debug(f"[retrieve_docs] 检索到 {len(chunks)} 个 chunk | q={embed_text[:40]!r}")
         chunk_dicts = [dict(c) for c in chunks]
@@ -245,7 +245,6 @@ async def retrieve_docs_node(state: RAGState) -> dict:
         })
         return {
             "retrieved_chunks": chunk_dicts,
-            "rewritten_query": rewritten,
             "node_steps": node_steps,
         }
     except Exception as exc:
@@ -258,7 +257,6 @@ async def retrieve_docs_node(state: RAGState) -> dict:
         })
         return {
             "retrieved_chunks": [],
-            "rewritten_query": rewritten,
             "node_steps": node_steps,
             "error": f"检索失败: {describe_exc(exc)}",
         }
@@ -266,13 +264,9 @@ async def retrieve_docs_node(state: RAGState) -> dict:
 
 def llm_query_for_completion(state: RAGState) -> str:
     """
-    选择送给 LLM 的用户问题文本。
-    - 本地 Ollama：不出网，可用原文，保留姓名/工号等上下文
-    - 外部 openai_compatible（含管理员分档路由）：必须用脱敏后的文本
+    送给 LLM 的用户问题。脱敏在 llm_client 出口统一做（R0），
+    这里始终返回原文，保证本地模型能用姓名/工号做上下文。
     """
-    from services.llm_client import should_anonymize_for_llm
-    if should_anonymize_for_llm(state.get("user_role")):
-        return state.get("anonymized_query") or state["query"]
     return state["query"]
 
 
@@ -597,9 +591,10 @@ async def decide_tool_node(state: RAGState) -> dict:
 async def execute_tool_node(state: RAGState) -> dict:
     from tools.base import tool_registry, ToolContext
     from core.config import settings
+    from core.anonymizer import contains_placeholder
 
     tool_name = state.get("tool_name")
-    tool_args = state.get("tool_args", {})
+    tool_args = dict(state.get("tool_args") or {})
     queue = state.get("token_queue")
     tool_step = int(state.get("tool_step") or 0)
     tool_history = list(state.get("tool_history") or [])
@@ -607,6 +602,11 @@ async def execute_tool_node(state: RAGState) -> dict:
 
     if not tool_name:
         return {"tool_result": None, "tool_success": None, "tool_error": None}
+
+    # 脱敏占位符参数视为无效（R0 边界）
+    for k, v in list(tool_args.items()):
+        if isinstance(v, str) and contains_placeholder(v):
+            tool_args.pop(k)
 
     ctx = ToolContext(user_id=state["user_id"], user_role=state.get("user_role", "employee"),
                      user_dept_id=state.get("user_dept_id"),

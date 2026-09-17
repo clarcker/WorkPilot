@@ -340,3 +340,40 @@ export async function getTrace(id: number): Promise<AgentTraceDetail> {
   const { data } = await client.get<AgentTraceDetail>(`/admin/traces/${id}`)
   return data
 }
+
+// ── IT Tickets (admin) ───────────────────────────────────────────
+
+export interface AdminTicket {
+  id: number
+  ticket_no: string
+  user_id: number
+  user_name: string
+  issue_type: string
+  description: string
+  status: string
+  handle_note: string | null
+  created_at: string
+}
+
+export async function listAdminTickets(
+  page = 1,
+  pageSize = 20,
+  status?: string,
+): Promise<{ items: AdminTicket[]; total: number }> {
+  const { data } = await client.get<PagedData<AdminTicket>>('/admin/tickets/all', {
+    params: { page, page_size: pageSize, status: status || undefined },
+  })
+  return { items: data?.items ?? [], total: data?.total ?? 0 }
+}
+
+export async function updateTicket(
+  id: number,
+  status: 'open' | 'in_progress' | 'closed',
+  handle_note?: string,
+): Promise<{ ticket_no: string; status: string }> {
+  const { data } = await client.post<{ ticket_no: string; status: string }>(
+    `/admin/tickets/${id}/decision`,
+    { status, handle_note },
+  )
+  return data
+}

@@ -363,7 +363,7 @@ async def _rag_gen(
             or "没有相关" in (full_answer or "")
         )
     )
-    db.add(QARecord(
+    qa_rec = QARecord(
         conversation_id=conv.id,
         user_id=user_id,
         dept_id=user_dept_id,
@@ -373,13 +373,21 @@ async def _rag_gen(
         doc_hit=bool(chunks),
         answer_preview=(full_answer or "")[:500],
         is_gap=is_gap,
-    ))
+    )
+    db.add(qa_rec)
 
     try:
         await db.commit()
+        await db.refresh(qa_rec)
+        qa_id = qa_rec.id
     except Exception as exc:
         logger.error(f"[chat_stream] 保存消息失败: {exc}")
         await db.rollback()
+        qa_id = None
+
+    # 供前端 👍/👎 反馈
+    if qa_id:
+        yield sse({"type": "qa_id", "content": qa_id})
 
     yield sse({"type": "done", "content": ""})
 

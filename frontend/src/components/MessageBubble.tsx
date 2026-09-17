@@ -9,7 +9,14 @@ import {
   RobotOutlined,
   UserOutlined,
   LoadingOutlined,
+  LikeOutlined,
+  DislikeOutlined,
+  LikeFilled,
+  DislikeFilled,
 } from '@ant-design/icons'
+import { Button, Space } from 'antd'
+import client from '../api/client'
+import { message as antMsg } from 'antd'
 import SourceCard from './SourceCard'
 import ToolCallCard from './ToolCallCard'
 import ConfirmCard, { FormIncompleteBanner } from './ConfirmCard'
@@ -28,6 +35,8 @@ export interface UiMessage {
   toolCalls?: ToolCallInfo[]
   confirm?: ConfirmRequiredPayload
   formIncomplete?: FormIncompletePayload
+  qaId?: number
+  feedback?: 'up' | 'down'
   streaming?: boolean
 }
 
@@ -116,6 +125,36 @@ export default function MessageBubble({
 
         {!isUser && msg.confirm && (
           <ConfirmCard data={msg.confirm} onDone={onConfirmDone} />
+        )}
+
+        {!isUser && msg.qaId && !msg.streaming && (
+          <Space size={4} style={{ marginTop: 4 }}>
+            <Button
+              size="small"
+              type="text"
+              icon={msg.feedback === 'up' ? <LikeFilled style={{ color: '#52c41a' }} /> : <LikeOutlined />}
+              onClick={async () => {
+                try {
+                  await client.post(`/quality/feedback/${msg.qaId}`, { feedback: 'up' })
+                  antMsg.success('感谢反馈')
+                } catch { /* ignore */ }
+              }}
+            />
+            <Button
+              size="small"
+              type="text"
+              icon={msg.feedback === 'down' ? <DislikeFilled style={{ color: '#ff4d4f' }} /> : <DislikeOutlined />}
+              onClick={async () => {
+                try {
+                  await client.post(`/quality/feedback/${msg.qaId}`, {
+                    feedback: 'down',
+                    reason: 'not_found',
+                  })
+                  antMsg.success('已记录，我们会补充知识库')
+                } catch { /* ignore */ }
+              }}
+            />
+          </Space>
         )}
 
         {!isUser && msg.sources && msg.sources.length > 0 && (

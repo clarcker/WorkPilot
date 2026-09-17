@@ -26,6 +26,8 @@ from api import eval as eval_router
 from api import reimbursements as reimb_router
 from api import traces as traces_router
 from api import tickets as tickets_router
+from api import ticket_admin as ticket_admin_router
+from api import quality as quality_router
 
 
 # ------------------------------------------------------------------
@@ -152,6 +154,8 @@ app.include_router(eval_router.router,   prefix="/api/eval",               tags=
 app.include_router(reimb_router.router,  prefix="/api/reimbursements",     tags=["报销申请"])
 app.include_router(traces_router.router, prefix="/api/admin/traces",       tags=["Agent Trace"])
 app.include_router(tickets_router.router, prefix="/api/tickets",           tags=["IT 工单"])
+app.include_router(ticket_admin_router.router, prefix="/api/admin/tickets", tags=["工单处理"])
+app.include_router(quality_router.router,   prefix="/api/quality",         tags=["评测/反馈/缺口"])
 
 
 # ------------------------------------------------------------------

@@ -7,7 +7,8 @@ import { Layout, Menu, Button, Tag, Typography } from 'antd'
 import {
   ArrowLeftOutlined, BankOutlined, TeamOutlined, FileTextOutlined,
   AuditOutlined, SettingOutlined, FileSearchOutlined,
-  SafetyCertificateOutlined, NodeIndexOutlined,
+  SafetyCertificateOutlined, NodeIndexOutlined, ToolOutlined,
+  AlertOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { getStoredUser } from '../hooks/useAuth'
@@ -16,6 +17,8 @@ import UsersTab from './admin/UsersTab'
 import DocumentsTab from './admin/DocumentsTab'
 import ApprovalsTab from './admin/ApprovalsTab'
 import TracesTab from './admin/TracesTab'
+import TicketsTab from './admin/TicketsTab'
+import GapsTab from './admin/GapsTab'
 import AuditLogsTab from './admin/AuditLogsTab'
 import SystemSettingsTab from './admin/SystemSettingsTab'
 import SystemLogsTab from './admin/SystemLogsTab'
@@ -25,7 +28,7 @@ const { Text } = Typography
 
 type TabKey =
   | 'departments' | 'users' | 'documents'
-  | 'approvals' | 'traces'
+  | 'approvals' | 'tickets' | 'traces' | 'gaps'
   | 'audit' | 'settings' | 'logs'
 
 export default function Admin() {
@@ -39,8 +42,10 @@ export default function Admin() {
     { key: 'users',      icon: <TeamOutlined />,      label: '账号管理' },
     { key: 'documents',  icon: <FileTextOutlined />,  label: '文档管理' },
     { key: 'approvals',  icon: <SafetyCertificateOutlined />, label: '报销审批' },
+    { key: 'tickets',    icon: <ToolOutlined />,              label: '工单处理' },
     { key: 'traces',     icon: <NodeIndexOutlined />, label: 'Agent Trace' },
     ...(isSuperAdmin ? [
+      { key: 'gaps',     icon: <AlertOutlined />,     label: '知识缺口' },
       { key: 'audit',    icon: <AuditOutlined />,    label: '审计日志' },
       { key: 'logs',     icon: <FileSearchOutlined />, label: '系统日志' },
       { key: 'settings', icon: <SettingOutlined />,  label: '系统设置' },
@@ -52,7 +57,9 @@ export default function Admin() {
     users:       <UsersTab />,
     documents:   <DocumentsTab />,
     approvals:   <ApprovalsTab />,
+    tickets:     <TicketsTab />,
     traces:      <TracesTab />,
+    gaps:        <GapsTab />,
     audit:       <AuditLogsTab />,
     logs:        <SystemLogsTab />,
     settings:    <SystemSettingsTab />,

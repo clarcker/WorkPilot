@@ -106,5 +106,6 @@ export type SSEEvent =
   | { type: 'tool_call';       content: ToolCallInfo }
   | { type: 'confirm_required'; content: ConfirmRequiredPayload }
   | { type: 'form_incomplete';  content: FormIncompletePayload }
+  | { type: 'qa_id';           content: number }
   | { type: 'done';            content: string }
   | { type: 'error';           content: string }

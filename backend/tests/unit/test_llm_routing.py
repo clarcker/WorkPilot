@@ -86,7 +86,8 @@ class TestShouldAnonymize:
 
 @pytest.mark.no_db
 class TestLlmQueryForCompletion:
-    def test_local_returns_original_query(self, restore_settings):
+    def test_always_returns_original_query(self, restore_settings):
+        """R0 后脱敏在 llm_client 出口；节点层始终送原文。"""
         from graph.nodes import llm_query_for_completion
 
         settings.llm_provider = "ollama"
@@ -99,23 +100,8 @@ class TestLlmQueryForCompletion:
         }
         assert llm_query_for_completion(state) == "张三的报销额度"
 
-    def test_external_returns_anonymized_query(self, restore_settings):
-        from graph.nodes import llm_query_for_completion
-
         settings.llm_provider = "openai_compatible"
-        state = {
-            "query": "张三的报销额度",
-            "anonymized_query": "[姓名]的报销额度",
-            "user_role": "employee",
-        }
-        assert llm_query_for_completion(state) == "[姓名]的报销额度"
-
-    def test_external_without_anonymized_falls_back_to_query(self, restore_settings):
-        from graph.nodes import llm_query_for_completion
-
-        settings.llm_provider = "openai_compatible"
-        state = {"query": "你好", "anonymized_query": "", "user_role": "employee"}
-        assert llm_query_for_completion(state) == "你好"
+        assert llm_query_for_completion(state) == "张三的报销额度"
 
 
 @pytest.mark.no_db

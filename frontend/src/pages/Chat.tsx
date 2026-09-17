@@ -341,6 +341,14 @@ export default function Chat() {
               )
               break
 
+            case 'qa_id':
+              setMessages(prev =>
+                prev.map(m =>
+                  m.id === assistantMsgId ? { ...m, qaId: evt.content } : m,
+                ),
+              )
+              break
+
             case 'done':
               setMessages((prev) =>
                 prev.map((m) =>
