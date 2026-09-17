@@ -22,19 +22,94 @@ from typing import AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.deps import get_active_user
-from db.models import Conversation, ConversationStatus, Message, MessageRole, User
+from core.logger import logger as app_logger
+from db.models import Conversation, ConversationStatus, Message, MessageRole, SystemConfig, User
 from db.session import async_session_factory, get_db
 from graph.state import HistoryMessage, RAGState
 from graph.workflow import rag_graph
-from schemas.chat import ChatRequest, ConversationDetail, ConversationOut, MessageOut
+from schemas.chat import ChatRequest, ConversationDetail, ConversationOut, ConversationRename, MessageOut
 from schemas.common import BaseResp, PagedData
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def _get_int_config(db: AsyncSession, key: str, default: int) -> int:
+    """从 system_config 读整数配置，缺失/类型异常时回退默认值。"""
+    raw = await db.scalar(select(SystemConfig.value).where(SystemConfig.key == key))
+    if raw is None:
+        return default
+    if isinstance(raw, dict) and "value" in raw:
+        raw = raw["value"]
+    try:
+        val = int(raw)
+        return val if val > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+async def _enforce_session_limit(db: AsyncSession, user_id: int, max_sessions: int) -> int:
+    """超出会话上限时，把最旧的 active 会话归档。返回归档数量。"""
+    total = await db.scalar(
+        select(func.count())
+        .select_from(Conversation)
+        .where(
+            Conversation.user_id == user_id,
+            Conversation.status == ConversationStatus.active,
+        )
+    )
+    total = total or 0
+    if total < max_sessions:
+        return 0
+
+    overflow = total - max_sessions + 1  # 给即将新建的会话腾一个位置
+    oldest = await db.execute(
+        select(Conversation)
+        .where(
+            Conversation.user_id == user_id,
+            Conversation.status == ConversationStatus.active,
+        )
+        .order_by(Conversation.updated_at.asc(), Conversation.id.asc())
+        .limit(overflow)
+    )
+    rows = oldest.scalars().all()
+    for conv in rows:
+        conv.status = ConversationStatus.archived
+    app_logger.info(
+        "[chat] 会话上限触发归档 | user_id={user} archived={n} max={mx}",
+        user=user_id, n=len(rows), mx=max_sessions,
+    )
+    return len(rows)
+
+
+async def _enforce_message_limit(db: AsyncSession, conv: Conversation, max_messages: int) -> int:
+    """超出单会话消息上限时，物理删除最早的消息。返回删除数量。"""
+    if conv.message_count < max_messages:
+        return 0
+
+    # 当前消息尚未计入 message_count，先为「用户+助手」两条预留空间
+    overflow = conv.message_count - max_messages + 2
+    oldest = await db.execute(
+        select(Message.id)
+        .where(Message.conversation_id == conv.id)
+        .order_by(Message.created_at.asc(), Message.id.asc())
+        .limit(overflow)
+    )
+    ids = [row[0] for row in oldest.all()]
+    if not ids:
+        return 0
+
+    await db.execute(delete(Message).where(Message.id.in_(ids)))
+    conv.message_count = max(0, conv.message_count - len(ids))
+    app_logger.info(
+        "[chat] 消息上限触发截断 | conv_id={conv} deleted={n} max={mx}",
+        conv=conv.id, n=len(ids), mx=max_messages,
+    )
+    return len(ids)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -97,8 +172,12 @@ async def _rag_gen(
 
     # ── 1. 创建或加载会话 ────────────────────────────────────────
     is_new_conv = req.conversation_id is None
+    max_sessions = await _get_int_config(db, "max_sessions_per_user", 200)
+    max_messages = await _get_int_config(db, "max_messages_per_session", 500)
+
     if is_new_conv:
-        # 新会话：标题取问题前 30 字
+        # 新会话：标题取问题前 30 字；先按上限归档最旧会话
+        await _enforce_session_limit(db, user_id, max_sessions)
         title = req.query[:30].strip()
         conv  = Conversation(user_id=user_id, title=title, status=ConversationStatus.active)
         db.add(conv)
@@ -119,6 +198,9 @@ async def _rag_gen(
     # ── 2. 若新会话，先推送 conversation_id ──────────────────────
     if is_new_conv:
         yield sse({"type": "conversation_id", "content": str(conv.id)})
+
+    # ── 2b. 会话消息上限：截断最早消息 ───────────────────────────
+    await _enforce_message_limit(db, conv, max_messages)
 
     # ── 3. 保存用户消息 ───────────────────────────────────────────
     user_msg = Message(
@@ -166,6 +248,14 @@ async def _rag_gen(
         tool_result=None,
         permission_denied=None,
         trace=[],
+        tool_step=0,
+        tool_history=[],
+        max_tool_steps=4,
+        node_steps=[],
+        requires_confirmation=False,
+        confirm_payload=None,
+        missing_slots=None,
+        rewritten_query=None,
     )
 
     pipeline_task = asyncio.create_task(rag_graph.ainvoke(initial_state))
@@ -223,9 +313,8 @@ async def _rag_gen(
             result="denied" if permission_denied else "success",
         )
 
-    # ── 8. 推送 sources 事件 ──────────────────────────────────────
-    if sources:
-        yield sse({"type": "sources", "content": sources})
+    # ── 8. sources 已在检索节点提前推送，此处不重复推送 ──────────
+    # （final_state.sources 仍会写入 DB，供历史会话回放）
 
     # ── 9. 保存助手消息，更新会话 ─────────────────────────────────
     assistant_msg = Message(
@@ -236,6 +325,55 @@ async def _rag_gen(
     )
     db.add(assistant_msg)
     conv.message_count += 2   # 用户 + 助手各一条
+
+    # ── 9c. 节点级 trace + QA 记录 ───────────────────────────────
+    from core.config import settings as app_settings
+    from db.models import AgentTrace, QARecord
+
+    steps = final_state.get("node_steps") or []
+    tool_hist = final_state.get("tool_history") or []
+    top1 = None
+    chunks = final_state.get("retrieved_chunks") or []
+    if chunks:
+        top1 = float(chunks[0].get("score") or 0)
+    llm_model = (
+        app_settings.openai_model
+        if app_settings.llm_provider == "openai_compatible"
+        else app_settings.ollama_chat_model
+    )
+    db.add(AgentTrace(
+        conversation_id=conv.id,
+        user_id=user_id,
+        query=req.query,
+        intent=final_state.get("intent"),
+        rewritten_query=final_state.get("rewritten_query"),
+        steps=steps,
+        tool_calls=tool_hist or None,
+        final_answer=(full_answer or "")[:4000],
+        sources=sources or None,
+        llm_model=llm_model,
+        error=final_state.get("error"),
+    ))
+    is_gap = (
+        final_state.get("intent") == "rag"
+        and (
+            not chunks
+            or (top1 is not None and top1 < 0.35)
+            or "未找到" in (full_answer or "")
+            or "没有相关" in (full_answer or "")
+        )
+    )
+    db.add(QARecord(
+        conversation_id=conv.id,
+        user_id=user_id,
+        dept_id=user_dept_id,
+        query=req.query,
+        intent=final_state.get("intent"),
+        top1_score=top1,
+        doc_hit=bool(chunks),
+        answer_preview=(full_answer or "")[:500],
+        is_gap=is_gap,
+    ))
 
     try:
         await db.commit()
@@ -326,6 +464,38 @@ async def get_conversation(
         conversation=ConversationOut.model_validate(conv),
         messages=[MessageOut.model_validate(m) for m in messages],
     ))
+
+
+# ══════════════════════════════════════════════════════════════════
+#  PATCH /conversations/{id}/title   重命名会话
+# ══════════════════════════════════════════════════════════════════
+
+@router.patch("/conversations/{conv_id}/title", response_model=BaseResp[ConversationOut])
+async def rename_conversation(
+    conv_id: int,
+    body: ConversationRename,
+    current_user: User = Depends(get_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    conv = await db.scalar(
+        select(Conversation).where(
+            Conversation.id      == conv_id,
+            Conversation.user_id == current_user.id,
+        )
+    )
+    if not conv:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": 40400, "message": "会话不存在"},
+        )
+    conv.title = body.title
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    await db.refresh(conv)
+    return BaseResp.ok(ConversationOut.model_validate(conv))
 
 
 # ══════════════════════════════════════════════════════════════════

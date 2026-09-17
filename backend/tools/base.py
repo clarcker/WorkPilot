@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import inspect
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
+
+# 工具执行默认超时（秒）。超时后返回结构化错误，不拖死整条 SSE 流。
+DEFAULT_TOOL_TIMEOUT = 15.0
 
 
 @dataclass
@@ -24,6 +28,10 @@ class ToolResult:
     data: Any = None
     error: Optional[str] = None
     deny_reason: Optional[str] = None
+    # 写操作需前端确认卡；execute 节点会据此发 SSE confirm_required
+    requires_confirmation: bool = False
+    # 表单缺必填槽位时的待补字段名列表
+    missing_slots: Optional[list[str]] = None
 
 
 @dataclass
@@ -104,7 +112,13 @@ class ToolRegistry:
             )
         return result
 
-    async def execute(self, name: str, args: dict, ctx: ToolContext) -> ToolResult:
+    async def execute(
+        self,
+        name: str,
+        args: dict,
+        ctx: ToolContext,
+        timeout: float = DEFAULT_TOOL_TIMEOUT,
+    ) -> ToolResult:
         td = self.get(name)
         if td is None:
             return ToolResult(success=False, error=f"Tool '{name}' not found")
@@ -131,10 +145,15 @@ class ToolRegistry:
                     pass
 
         try:
-            result = await td.func(coerced_args, ctx)
+            result = await asyncio.wait_for(td.func(coerced_args, ctx), timeout=timeout)
             if isinstance(result, ToolResult):
                 return result
             return ToolResult(success=True, data=result)
+        except asyncio.TimeoutError:
+            return ToolResult(
+                success=False,
+                error=f"Tool '{name}' timed out after {timeout}s",
+            )
         except Exception as exc:
             return ToolResult(success=False, error=str(exc))
 

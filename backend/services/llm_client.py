@@ -4,6 +4,10 @@ LLM 客户端服务：统一封装不同提供商的聊天模型调用。
 支持：
 - Ollama 本地模型（/api/chat）
 - OpenAI 兼容 API（/v1/chat/completions）
+
+模型分档（见 需求文档 3.3）：
+- 管理员 + admin_use_external_llm + 已配置 API Key → 外部高级模型
+- 其余用户 → settings.llm_provider（默认本地 Ollama）
 """
 from __future__ import annotations
 
@@ -12,8 +16,28 @@ from typing import AsyncIterator
 
 import httpx
 
-from core.config import settings
+from core.config import maybe_reload_settings, settings
 from core.logger import logger
+
+_ADMIN_ROLES = frozenset({"super_admin", "dept_admin"})
+
+
+def resolve_provider(user_role: str | None = None) -> str:
+    """按角色解析实际使用的 LLM 提供商。每次调用前检查配置文件是否变更。"""
+    maybe_reload_settings()
+    if (
+        user_role in _ADMIN_ROLES
+        and settings.admin_use_external_llm
+        and settings.openai_api_key
+        and settings.openai_api_key.strip()
+    ):
+        return "openai_compatible"
+    return settings.llm_provider
+
+
+def should_anonymize_for_llm(user_role: str | None = None) -> bool:
+    """只有真正出网到外部 API 时才需要脱敏。"""
+    return resolve_provider(user_role) == "openai_compatible"
 
 
 def _complete_timeout() -> httpx.Timeout:
@@ -46,6 +70,7 @@ async def chat_complete(
     messages: list[dict],
     temperature: float = 0.3,
     max_tokens: int = 256,
+    user_role: str | None = None,
 ) -> str:
     """
     非流式调用 LLM，返回完整回复字符串。
@@ -54,11 +79,12 @@ async def chat_complete(
         messages: 消息列表，格式 [{"role": "user", "content": "..."}]
         temperature: 温度参数
         max_tokens: 最大生成 token 数
+        user_role: 用于模型分档；None 时走全局 llm_provider
 
     Returns:
         模型生成的完整文本
     """
-    provider = settings.llm_provider
+    provider = resolve_provider(user_role)
 
     if provider == "ollama":
         return await _ollama_complete(messages, temperature, max_tokens)
@@ -107,7 +133,10 @@ async def _openai_complete(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
-    logger.info("LLM call | provider=openai_compatible (complete) | model={model}", model=settings.openai_model)
+    logger.info(
+        "LLM call | provider=openai_compatible (complete) | model={model} | base={base}",
+        model=settings.openai_model, base=settings.openai_base_url,
+    )
     async with httpx.AsyncClient(timeout=_complete_timeout()) as client:
         resp = await client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
@@ -122,6 +151,7 @@ async def chat_stream(
     messages: list[dict],
     temperature: float = 0.3,
     max_tokens: int = 2048,
+    user_role: str | None = None,
 ) -> AsyncIterator[str]:
     """
     流式调用 LLM 聊天接口。
@@ -130,11 +160,12 @@ async def chat_stream(
         messages: 消息列表，格式 [{"role": "user", "content": "..."}]
         temperature: 温度参数
         max_tokens: 最大生成 token 数
+        user_role: 用于模型分档；None 时走全局 llm_provider
 
     Yields:
         模型生成的 token 字符串
     """
-    provider = settings.llm_provider
+    provider = resolve_provider(user_role)
 
     if provider == "ollama":
         async for token in _ollama_stream(messages, temperature, max_tokens):
@@ -200,7 +231,10 @@ async def _openai_stream(
         "max_tokens": max_tokens,
     }
 
-    logger.info("LLM call | provider=openai_compatible | model={model}", model=settings.openai_model)
+    logger.info(
+        "LLM call | provider=openai_compatible | model={model} | base={base}",
+        model=settings.openai_model, base=settings.openai_base_url,
+    )
 
     async with httpx.AsyncClient(timeout=_stream_timeout()) as client:
         async with client.stream("POST", url, json=payload, headers=headers) as response:

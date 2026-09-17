@@ -138,5 +138,73 @@
       "user_dept_id": 2
     },
     "description": "权限负例：必须以普通员工身份运行——super_admin 会跳过全部权限过滤，用调用者身份跑这条恒失败"
+  },
+  {
+    "id": "case_017",
+    "question": "我9月20号到22号去北京出差3天，酒店花了1800，帮我提交报销",
+    "expected_intent": "rag",
+    "expected_tool": "submit_reimbursement_request",
+    "expected_tool_args": {
+      "category": "差旅住宿",
+      "amount": 1800
+    },
+    "expect_tool_success": true,
+    "should_cite": false,
+    "description": "场景A：超标住宿提交（应先 precheck 再 submit，dry_run 不落库）"
+  },
+  {
+    "id": "case_018",
+    "question": "帮我预审一下：差旅住宿，金额900，2天",
+    "expected_intent": "rag",
+    "expected_tool": "precheck_reimbursement",
+    "expected_tool_args": {
+      "category": "差旅住宿",
+      "amount": 900
+    },
+    "expect_tool_success": true,
+    "should_cite": false,
+    "description": "场景A：合规预审（900/2天=450，mid/senior 日标≥500 应通过）"
+  },
+  {
+    "id": "case_019",
+    "question": "我最近的报销申请进度怎么样？",
+    "expected_intent": "rag",
+    "expected_tool": "query_my_reimbursements",
+    "expect_tool_success": true,
+    "should_cite": false,
+    "description": "场景A：查我的报销进度"
+  },
+  {
+    "id": "case_020",
+    "question": "帮我查一下 user_id=2 的报销额度",
+    "expected_intent": "rag",
+    "expected_tool": "query_reimbursement_limit",
+    "expect_tool_denied": true,
+    "should_cite": false,
+    "as_user": {
+      "user_id": 999001,
+      "user_role": "employee",
+      "user_dept_id": 1
+    },
+    "description": "场景A：越权查他人额度应被拒绝，且不透露对方是否存在"
+  },
+  {
+    "id": "case_021",
+    "question": "打印机坏了，帮我报修",
+    "expected_intent": "rag",
+    "expected_tool": "create_it_ticket",
+    "expected_tool_args": {
+      "issue_type": "打印机故障"
+    },
+    "expect_tool_success": true,
+    "should_cite": false,
+    "description": "场景B：IT 工单创建"
+  },
+  {
+    "id": "case_022",
+    "question": "那出差补贴呢？",
+    "expected_intent": "rag",
+    "should_cite": true,
+    "description": "多轮追问：无历史时应仍能检索到报销/补贴相关制度（改写降级为原 query）"
   }
 ]

@@ -661,8 +661,31 @@ Content-Type: application/json
 | `conversation_id` | **number**（整数） | 新建会话时第一条，客户端须保存用于后续追问 |
 | `token` | string | 流式 token，依次拼接为完整回答 |
 | `sources` | array | 检索到相关文档时出现，结构见下 |
+| `tool_call` | object | 工具调用结果（含 `requires_confirmation` / `missing_slots`） |
+| `confirm_required` | object | 写操作生成草稿，需用户确认；见下 |
+| `form_incomplete` | object | 槽位缺失：`{missing_slots, message}` |
 | `done` | string（空） | 流结束标志，最后一条 |
 | `error` | string | 异常描述，之后紧跟 `done` |
+
+**confirm_required content**
+
+```jsonc
+{
+  "tool_name": "submit_reimbursement_request",
+  "payload": {
+    "request_id": 1,
+    "request_no": "RB-20260916-0001",
+    "status": "draft",
+    "requires_confirmation": true,
+    "form": { "category": "差旅住宿", "amount": 1800, "days": 3, "trip_start": "...", "trip_end": "...", "approval_ref": "TR-..." },
+    "precheck": { "ok": true, "remaining": 37700, "requires_special_approval": true, "violations": [...] }
+  }
+}
+```
+
+确认 / 取消：
+- `POST /api/reimbursements/{request_id}/confirm` → `pending`，占用年度额度
+- `POST /api/reimbursements/{request_id}/cancel` → `cancelled`，不产生审批记录
 
 **sources 单项结构**
 
@@ -686,6 +709,10 @@ data: {"type": "token", "content": "公司年假"}
 data: {"type": "token", "content": "政策如下："}
 
 data: {"type": "sources", "content": [{"doc_id": 10, "doc_name": "入职手册.pdf", "chunk_id": 42, "heading": "第三章 年假制度", "page_no": 8, "score": 0.87}]}
+
+data: {"type": "tool_call", "content": {"tool_name": "submit_reimbursement_request", "tool_args": {"category": "差旅住宿", "amount": 1800}, "allowed": true, "result": {"request_id": 1, "request_no": "RB-20260916-0001", "status": "draft"}, "requires_confirmation": true, "latency_ms": 12}}
+
+data: {"type": "confirm_required", "content": {"tool_name": "submit_reimbursement_request", "payload": {"request_id": 1, "request_no": "RB-20260916-0001", "form": {"category": "差旅住宿", "amount": 1800, "days": 3}, "precheck": {"ok": true, "requires_special_approval": true, "violations": [{"rule": "daily_max", "message": "住宿日均 600 元，超出标准 500 元/天，超标 300 元"}]}}}}
 
 data: {"type": "done", "content": ""}
 ```
@@ -770,6 +797,25 @@ DELETE /api/chat/conversations/{conv_id}
 | **合计** | **33** | — | — |
 
 > **Phase 2 待实现**：审计日志查询 `/api/admin/audit`、系统配置 `/api/admin/system`。
+
+---
+
+## 7b. 报销申请 `/api/reimbursements`
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| POST | `/{id}/confirm` | `[登录]` | 确认草稿 → pending，占用额度 |
+| POST | `/{id}/cancel` | `[登录]` | 取消 draft/pending，退回额度 |
+| GET | `/mine` | `[登录]` | 我的申请列表 |
+| GET | `/approvals` | `[管理员]` | 审批队列（部门管理员仅本部门） |
+| POST | `/{id}/decision` | `[管理员]` | `{"approved": bool, "comment": "..."}` |
+
+## 7c. Agent Trace `/api/admin/traces`
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/` | `[管理员]` | 分页列表；部门管理员仅本部门 |
+| GET | `/{id}` | `[管理员]` | 节点步骤、工具、回答详情 |
 
 ---
 

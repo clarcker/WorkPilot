@@ -159,6 +159,14 @@ async def run_case(
         trace=[],
         tool_success=None,
         tool_error=None,
+        tool_step=0,
+        tool_history=[],
+        max_tool_steps=4,
+        node_steps=[],
+        requires_confirmation=False,
+        confirm_payload=None,
+        missing_slots=None,
+        rewritten_query=None,
         skip_generation=skip_generation,
         gen_max_tokens=gen_max_tokens,
         tool_dry_run=tool_dry_run,
@@ -199,31 +207,50 @@ async def run_case(
         doc_hit = any(expected_title in name for name in source_doc_names)
 
     # 工具调用：该调的调对、不该调的不调、参数合法、执行成功
+    # 多步循环下 tool_name 是最后一次；tool_history 记录全部步骤
     expected_tool = case.get("expected_tool")
+    tool_history = final_state.get("tool_history") or []
     actual_tool = final_state.get("tool_name")
     actual_args = final_state.get("tool_args") or {}
     tool_success = final_state.get("tool_success")
     tool_error = final_state.get("tool_error")
 
+    # 期望工具出现在历史任意一步即算命中（适配 precheck→submit 等多步）
+    hist_names = [h.get("name") for h in tool_history]
+    hist_hit = None
+    if expected_tool:
+        for h in tool_history:
+            if h.get("name") == expected_tool:
+                hist_hit = h
+                break
+
     tool_detail = ""
     if expected_tool:
-        if actual_tool != expected_tool:
+        if actual_tool != expected_tool and hist_hit is None:
             tool_call_correct = False
-            tool_detail = f"工具: 期望={expected_tool}, 实际={actual_tool}"
+            tool_detail = f"工具: 期望={expected_tool}, 实际={actual_tool or hist_names or '无'}"
         else:
-            args_ok, args_msg = _args_match(case.get("expected_tool_args", {}), actual_args)
-            # 只比对工具名会放过"名字对但参数全错"的调用——历史上模型生成过
-            # {"问题类型": ...}，工具读的是 args["issue_type"]，工单从未真正创建
-            exec_ok = (not case.get("expect_tool_success")) or tool_success is True
+            # 参数比对：优先历史中命中的那一步，否则比对最后一次
+            check_args = (hist_hit or {}).get("args") or actual_args
+            check_ok = (hist_hit or {}).get("success")
+            if check_ok is None:
+                check_ok = tool_success
+            args_ok, args_msg = _args_match(case.get("expected_tool_args", {}), check_args)
+            exec_ok = (not case.get("expect_tool_success")) or check_ok is True
+            # expect_tool_denied：期望权限拒绝
+            if case.get("expect_tool_denied"):
+                exec_ok = check_ok is False and bool(
+                    (hist_hit or {}).get("error") or tool_error or final_state.get("permission_denied")
+                )
             tool_call_correct = args_ok and exec_ok
             if not args_ok:
-                tool_detail = f"工具参数不符（实际={actual_args}）: {args_msg}"
+                tool_detail = f"工具参数不符（实际={check_args}）: {args_msg}"
             elif not exec_ok:
-                tool_detail = f"工具 {actual_tool} 执行失败: {tool_error}"
+                tool_detail = f"工具 {expected_tool} 执行结果不符: {tool_error or (hist_hit or {}).get('error')}"
     else:
-        tool_call_correct = actual_tool is None
+        tool_call_correct = actual_tool is None and not hist_names
         if not tool_call_correct:
-            tool_detail = f"工具: 期望不调用, 实际={actual_tool}({actual_args})"
+            tool_detail = f"工具: 期望不调用, 实际={actual_tool or hist_names}({actual_args})"
 
     has_citation = len(sources) > 0 if case.get("should_cite") else True
 

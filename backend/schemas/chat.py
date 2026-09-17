@@ -51,3 +51,15 @@ class MessageOut(BaseModel):
 class ConversationDetail(BaseModel):
     conversation: ConversationOut
     messages:     list[MessageOut]
+
+
+class ConversationRename(BaseModel):
+    title: str = Field(..., min_length=1, max_length=100, description="新标题")
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("标题不能为空")
+        return v

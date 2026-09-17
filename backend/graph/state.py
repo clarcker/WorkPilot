@@ -54,6 +54,21 @@ class RAGState(TypedDict):
     tool_success: NotRequired[Optional[bool]]  # None=未调用工具
     tool_error:   NotRequired[Optional[str]]   # 执行失败/权限拒绝的原因
 
+    # ── 多步工具循环 ─────────────────────────────────
+    tool_step:       NotRequired[int]           # 已执行工具次数
+    tool_history:    NotRequired[list[dict]]    # [{name,args,result,success}]
+    max_tool_steps:  NotRequired[int]           # 默认 4
+    # 写操作确认 / 槽位缺失
+    requires_confirmation: NotRequired[bool]
+    confirm_payload: NotRequired[Optional[dict]]
+    missing_slots:   NotRequired[Optional[list[str]]]
+
+    # ── 查询改写 ─────────────────────────────────────
+    rewritten_query: NotRequired[Optional[str]]
+
+    # ── 节点级 trace（供 agent_traces 落库）──────────
+    node_steps:      NotRequired[list[dict]]
+
     # ── 评测开关（仅 eval runner 设置，线上聊天不传）─────────────
     # 评测指标只依赖 intent / sources / tool_name，不需要答案正文。
     # 打开 skip_generation 可跳过最耗时的生成节点（CPU 上 ~100s/条）。

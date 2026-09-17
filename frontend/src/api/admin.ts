@@ -248,3 +248,95 @@ export async function getSystemLogs(params?: {
   const { data } = await client.get<LogResponse>('/admin/system/logs', { params })
   return data ?? { date: '', file_exists: false, total: 0, page: 1, page_size: 100, items: [] }
 }
+
+// ── Reimbursement Approvals ──────────────────────────────────────
+
+export interface ApprovalItem {
+  id: number
+  request_no: string
+  user_id: number
+  dept_id: number | null
+  category: string
+  amount: number
+  days: number | null
+  trip_start: string | null
+  trip_end: string | null
+  approval_ref: string | null
+  precheck_result: {
+    ok?: boolean
+    remaining?: number
+    daily_max?: number
+    requires_special_approval?: boolean
+    violations?: Array<{ rule?: string; message?: string; over_amount?: number }>
+  } | null
+  status: string
+  created_at: string
+}
+
+export async function listApprovals(page = 1, pageSize = 20): Promise<{
+  items: ApprovalItem[]
+  total: number
+}> {
+  const { data } = await client.get<PagedData<ApprovalItem>>('/reimbursements/approvals', {
+    params: { page, page_size: pageSize },
+  })
+  return { items: data?.items ?? [], total: data?.total ?? 0 }
+}
+
+export async function decideApproval(
+  id: number,
+  approved: boolean,
+  comment?: string,
+): Promise<{ request_no: string; status: string }> {
+  const { data } = await client.post<{ request_no: string; status: string }>(
+    `/reimbursements/${id}/decision`,
+    { approved, comment },
+  )
+  return data
+}
+
+// ── Agent Traces ─────────────────────────────────────────────────
+
+export interface AgentTraceStep {
+  node: string
+  output_summary?: string
+  latency_ms?: number
+  error?: string | null
+}
+
+export interface AgentTraceListItem {
+  id: number
+  conversation_id: number | null
+  user_id: number
+  query: string
+  intent: string | null
+  rewritten_query: string | null
+  steps: AgentTraceStep[]
+  tool_calls: Array<Record<string, unknown>> | null
+  llm_model: string | null
+  total_latency_ms: number | null
+  error: string | null
+  created_at: string
+}
+
+export interface AgentTraceDetail extends AgentTraceListItem {
+  final_answer: string | null
+  sources: Array<Record<string, unknown>> | null
+}
+
+export async function listTraces(params?: {
+  page?: number
+  page_size?: number
+  user_id?: number
+  conversation_id?: number
+}): Promise<{ items: AgentTraceListItem[]; total: number }> {
+  const { data } = await client.get<PagedData<AgentTraceListItem>>('/admin/traces/', {
+    params,
+  })
+  return { items: data?.items ?? [], total: data?.total ?? 0 }
+}
+
+export async function getTrace(id: number): Promise<AgentTraceDetail> {
+  const { data } = await client.get<AgentTraceDetail>(`/admin/traces/${id}`)
+  return data
+}

@@ -5,8 +5,6 @@ import {
   useRef,
   useState,
 } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import {
   Layout,
   List,
@@ -23,19 +21,24 @@ import {
   Badge,
 } from 'antd'
 import SettingsModal from '../components/SettingsModal'
+import MessageBubble, { type UiMessage } from '../components/MessageBubble'
+import MyReimbursementsModal from '../components/MyReimbursementsModal'
+import MyTicketsModal from '../components/MyTicketsModal'
 
 import {
   PlusOutlined,
   SendOutlined,
   DeleteOutlined,
+  EditOutlined,
   SettingOutlined,
   RobotOutlined,
   UserOutlined,
   LogoutOutlined,
   EllipsisOutlined,
-  LoadingOutlined,
   DashboardOutlined,
   CloseCircleOutlined,
+  AccountBookOutlined,
+  ToolOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { logout } from '../api/auth'
@@ -43,27 +46,15 @@ import {
   listConversations,
   getConversation,
   deleteConversation,
+  renameConversation,
   streamChat,
 } from '../api/chat'
 import { getStoredUser } from '../hooks/useAuth'
-import SourceCard from '../components/SourceCard'
-import ToolCallCard from '../components/ToolCallCard'
-import type { Conversation, Message, Source, ToolCallInfo } from '../types'
+import type { Conversation, Message, Source } from '../types'
 
 const { Sider, Content } = Layout
 const { Text } = Typography
 const { TextArea } = Input
-
-// ─── types ───────────────────────────────────────────────────────
-
-interface UiMessage {
-  id: number | string   // string for optimistic / streaming messages
-  role: 'user' | 'assistant'
-  content: string
-  sources?: Source[]
-  toolCalls?: ToolCallInfo[]
-  streaming?: boolean
-}
 
 // ─── helpers ─────────────────────────────────────────────────────
 
@@ -96,6 +87,8 @@ export default function Chat() {
   const [inputValue, setInputValue]           = useState('')
   const [siderCollapsed, setSiderCollapsed]   = useState(false)
   const [settingsOpen,   setSettingsOpen]     = useState(false)
+  const [myReimbOpen,    setMyReimbOpen]      = useState(false)
+  const [myTicketsOpen,  setMyTicketsOpen]    = useState(false)
   const [showRetry, setShowRetry]             = useState(false)
 
   const bottomRef   = useRef<HTMLDivElement>(null)
@@ -131,14 +124,24 @@ export default function Chat() {
   useEffect(() => { refreshConversations() }, [refreshConversations])
 
   // ── select / load a conversation ──────────────────────────────
+  // 流式中也允许切换：先 abort 当前请求，再加载目标会话
+  const switchPendingRef = useRef(false)
+
+  function abortStreamIfAny() {
+    if (abortRef.current) {
+      switchPendingRef.current = true
+      abortRef.current.abort()
+      abortRef.current = null
+    }
+  }
+
   async function openConversation(id: number) {
-    if (streaming) return          // don't switch mid-stream
-    if (id === activeId) return
-    
-    // Clean up any pending timeout/retry state
+    if (id === activeId && !streaming) return
+
+    abortStreamIfAny()
     clearTimeoutTimer()
     setShowRetry(false)
-    
+
     setActiveId(id)
     setMessages([])
     setLoadingMsgs(true)
@@ -155,19 +158,18 @@ export default function Chat() {
       antMessage.error('加载消息失败')
     } finally {
       setLoadingMsgs(false)
+      switchPendingRef.current = false
     }
   }
 
   // ── new conversation ───────────────────────────────────────────
   function newConversation() {
-    if (streaming) return
-    
-    // Clean up any pending timeout/retry state
+    abortStreamIfAny()
     clearTimeoutTimer()
     setShowRetry(false)
-    
     setActiveId(null)
     setMessages([])
+    switchPendingRef.current = false
   }
 
   // ── delete conversation ────────────────────────────────────────
@@ -184,6 +186,40 @@ export default function Chat() {
         if (activeId === conv.id) {
           setActiveId(null)
           setMessages([])
+        }
+      },
+    })
+  }
+
+  // ── rename conversation ────────────────────────────────────────
+  function handleRename(conv: Conversation) {
+    let inputVal = conv.title || ''
+    Modal.confirm({
+      title: '重命名对话',
+      content: (
+        <Input
+          defaultValue={inputVal}
+          placeholder="输入新标题"
+          maxLength={100}
+          onChange={(e) => { inputVal = e.target.value }}
+        />
+      ),
+      okText: '保存',
+      cancelText: '取消',
+      onOk: async () => {
+        const title = inputVal.trim()
+        if (!title) {
+          antMessage.warning('标题不能为空')
+          return
+        }
+        try {
+          const updated = await renameConversation(conv.id, title)
+          setConversations((prev) =>
+            prev.map((c) => (c.id === conv.id ? { ...c, title: updated.title } : c)),
+          )
+          antMessage.success('已重命名')
+        } catch {
+          antMessage.error('重命名失败')
         }
       },
     })
@@ -289,6 +325,22 @@ export default function Chat() {
               })
               break
 
+            case 'confirm_required':
+              setMessages(prev =>
+                prev.map(m =>
+                  m.id === assistantMsgId ? { ...m, confirm: evt.content } : m,
+                ),
+              )
+              break
+
+            case 'form_incomplete':
+              setMessages(prev =>
+                prev.map(m =>
+                  m.id === assistantMsgId ? { ...m, formIncomplete: evt.content } : m,
+                ),
+              )
+              break
+
             case 'done':
               setMessages((prev) =>
                 prev.map((m) =>
@@ -313,7 +365,7 @@ export default function Chat() {
         ctrl.signal,
       )
     } catch (err: unknown) {
-      if ((err as Error).name !== 'AbortError') {
+      if ((err as Error).name !== 'AbortError' && !switchPendingRef.current) {
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantMsgId
@@ -377,11 +429,18 @@ export default function Chat() {
         theme="light"
         style={{
           borderRight: '1px solid #f0f0f0',
-          display: 'flex',
-          flexDirection: 'column',
+          height: '100vh',
           overflow: 'hidden',
         }}
       >
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            height: '100%',
+            minHeight: 0,
+          }}
+        >
         {/* Header */}
         <div
           style={{
@@ -391,6 +450,7 @@ export default function Chat() {
             alignItems: 'center',
             gap: 10,
             justifyContent: siderCollapsed ? 'center' : 'flex-start',
+            flexShrink: 0,
           }}
         >
           <RobotOutlined style={{ fontSize: 22, color: '#1677ff', flexShrink: 0 }} />
@@ -402,7 +462,7 @@ export default function Chat() {
         </div>
 
         {/* New Chat button */}
-        <div style={{ padding: siderCollapsed ? '12px 8px' : '12px 16px' }}>
+        <div style={{ padding: siderCollapsed ? '12px 8px' : '12px 16px', flexShrink: 0 }}>
           <Tooltip title={siderCollapsed ? '新对话' : ''} placement="right">
             <Button
               type="primary"
@@ -416,8 +476,16 @@ export default function Chat() {
           </Tooltip>
         </div>
 
-        {/* Conversation list */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px' }}>
+        {/* Conversation list — flex:1 + minHeight:0 才能真正内部滚动 */}
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: '0 8px 8px',
+          }}
+        >
           {loadingConvs ? (
             <div style={{ textAlign: 'center', padding: 24 }}>
               <Spin size="small" />
@@ -492,6 +560,15 @@ export default function Chat() {
                           menu={{
                             items: [
                               {
+                                key: 'rename',
+                                icon: <EditOutlined />,
+                                label: '重命名',
+                                onClick: ({ domEvent }) => {
+                                  domEvent.stopPropagation()
+                                  handleRename(conv)
+                                },
+                              },
+                              {
                                 key: 'delete',
                                 icon: <DeleteOutlined />,
                                 label: '删除',
@@ -522,7 +599,7 @@ export default function Chat() {
           )}
         </div>
 
-        {/* User info + logout */}
+        {/* User info + logout — 固定在侧栏底部 */}
         <div
           style={{
             padding: siderCollapsed ? '12px 8px' : '12px 16px',
@@ -531,6 +608,8 @@ export default function Chat() {
             alignItems: 'center',
             gap: 8,
             justifyContent: siderCollapsed ? 'center' : 'flex-start',
+            flexShrink: 0,
+            background: '#fff',
           }}
         >
           <Avatar size={32} icon={<UserOutlined />} style={{ background: '#1677ff', flexShrink: 0 }} />
@@ -544,6 +623,22 @@ export default function Chat() {
                   {user?.dept_name ?? '系统'}
                 </Text>
               </div>
+              <Tooltip title="我的报销">
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<AccountBookOutlined />}
+                  onClick={() => setMyReimbOpen(true)}
+                />
+              </Tooltip>
+              <Tooltip title="我的工单">
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<ToolOutlined />}
+                  onClick={() => setMyTicketsOpen(true)}
+                />
+              </Tooltip>
               <Tooltip title="个人设置">
                 <Button
                   size="small"
@@ -553,7 +648,7 @@ export default function Chat() {
                 />
               </Tooltip>
               {(user?.role === 'super_admin' || user?.role === 'dept_admin') && (
-                <Tooltip title="管理后台">
+                <Tooltip title="管理后台（审批 / Trace / 账号）">
                   <Button
                     size="small"
                     type="text"
@@ -573,10 +668,13 @@ export default function Chat() {
             </>
           )}
         </div>
+        </div>
       </Sider>
 
       {/* ── Personal settings modal ───────────────────────────── */}
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <MyReimbursementsModal open={myReimbOpen} onClose={() => setMyReimbOpen(false)} />
+      <MyTicketsModal open={myTicketsOpen} onClose={() => setMyTicketsOpen(false)} />
 
       {/* ── Chat area ─────────────────────────────────────────── */}
       <Content
@@ -637,7 +735,20 @@ export default function Chat() {
           ) : (
             <div style={{ maxWidth: 800, margin: '0 auto', padding: '0 24px' }}>
               {messages.map((msg) => (
-                <MessageBubble key={msg.id} msg={msg} />
+                <MessageBubble
+                  key={msg.id}
+                  msg={msg}
+                  onConfirmDone={(action, text) => {
+                    setMessages(prev => [
+                      ...prev,
+                      {
+                        id: `sys-${Date.now()}`,
+                        role: 'assistant',
+                        content: action === 'confirmed' ? `✅ ${text}` : `🚫 ${text}`,
+                      },
+                    ])
+                  }}
+                />
               ))}
               <div ref={bottomRef} />
             </div>
@@ -719,88 +830,3 @@ export default function Chat() {
   )
 }
 
-// ─── MessageBubble sub-component ──────────────────────────────────
-
-function MessageBubble({ msg }: { msg: UiMessage }) {
-  const isUser = msg.role === 'user'
-
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: isUser ? 'row-reverse' : 'row',
-        gap: 10,
-        marginBottom: 20,
-        alignItems: 'flex-start',
-      }}
-    >
-      {/* Avatar */}
-      <Avatar
-        size={36}
-        icon={isUser ? <UserOutlined /> : <RobotOutlined />}
-        style={{
-          background: isUser ? '#1677ff' : '#52c41a',
-          flexShrink: 0,
-        }}
-      />
-
-      {/* Bubble */}
-      <div style={{ maxWidth: '78%' }}>
-        <div
-          style={{
-            background: isUser ? '#1677ff' : '#fff',
-            color: isUser ? '#fff' : '#1a1a1a',
-            padding: '10px 14px',
-            borderRadius: isUser ? '16px 4px 16px 16px' : '4px 16px 16px 16px',
-            boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
-            fontSize: 14,
-            lineHeight: 1.7,
-            wordBreak: 'break-word',
-          }}
-        >
-          {!msg.content && msg.streaming ? (
-            <span style={{ color: '#52c41a' }}>
-              <LoadingOutlined style={{ marginRight: 6 }} />
-              {msg.sources ? '已找到相关资料，正在生成回答…' : '思考中…'}
-            </span>
-          ) : isUser ? (
-            <span style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</span>
-          ) : (
-            <div className="md-body">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-            </div>
-          )}
-          {msg.streaming && msg.content && (
-            <span
-              style={{
-                display: 'inline-block',
-                width: 2,
-                height: 14,
-                background: '#52c41a',
-                marginLeft: 2,
-                verticalAlign: 'middle',
-                animation: 'blink 1s step-start infinite',
-              }}
-            />
-          )}
-        </div>
-
-        {/* Tool Calls */}
-        {!isUser && msg.toolCalls && msg.toolCalls.length > 0 && (
-          <div style={{ marginTop: 6 }}>
-            {msg.toolCalls.map((tc, i) => (
-              <ToolCallCard key={i} info={tc} />
-            ))}
-          </div>
-        )}
-
-        {/* Sources */}
-        {!isUser && msg.sources && msg.sources.length > 0 && (
-          <div style={{ marginTop: 6 }}>
-            <SourceCard sources={msg.sources} />
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}

@@ -8,3 +8,9 @@ __pycache__/
 .idea/
 **/dist/
 **/node_modules/
+
+# 运行时产物
+*.pid
+backend/logs/
+backend/uploads/
+scripts_split_admin.py

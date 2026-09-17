@@ -5,6 +5,7 @@ WorkPilot v2 — FastAPI 入口
     uv run fastapi dev main.py       # 开发（热重载，端口 8000）
     uv run gunicorn main:app ...     # 生产
 """
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -22,6 +23,9 @@ from api import users as user_router
 from api import audit as audit_router
 from api import system as system_router
 from api import eval as eval_router
+from api import reimbursements as reimb_router
+from api import traces as traces_router
+from api import tickets as tickets_router
 
 
 # ------------------------------------------------------------------
@@ -39,8 +43,26 @@ async def lifespan(app: FastAPI):
         environment=settings.environment,
     )
     logger.info("WorkPilot v2 starting | env={env}", env=settings.environment)
+    for w in settings.validate_for_startup():
+        logger.warning("[security] {w}", w=w)
+    # 模型分档路由一览（排查「改了配置仍走本地」先看这行）
+    from core.config import describe_llm_routing
+    logger.info("[llm] routing | {r}", r=describe_llm_routing())
+
+    # 后台清理：归档会话过期 + 过期吊销 token
+    from services.cleanup import cleanup_loop
+    stop_event = asyncio.Event()
+    cleanup_task = asyncio.create_task(cleanup_loop(stop_event))
+
     yield
+
     # 关闭
+    stop_event.set()
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     logger.info("WorkPilot v2 shutting down")
 
 
@@ -58,11 +80,11 @@ app = FastAPI(
 )
 
 # ------------------------------------------------------------------
-# 跨域（开发阶段开放，生产环境收紧 origins）
+# 跨域：开发默认 localhost:5173；生产通过 CORS_ORIGINS 配置白名单
 # ------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],     # 生产环境改为前端域名
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -71,6 +93,14 @@ app.add_middleware(
 # 请求日志中间件
 from core.logger import RequestLoggingMiddleware
 app.add_middleware(RequestLoggingMiddleware)
+
+# 限流：登录 + 对话流（内存滑动窗口，单机用）
+from core.ratelimit import RateLimitMiddleware
+app.add_middleware(
+    RateLimitMiddleware,
+    login_per_minute=settings.rate_limit_login_per_minute,
+    chat_per_5min=settings.rate_limit_chat_per_5min,
+)
 
 
 # ------------------------------------------------------------------
@@ -119,6 +149,9 @@ app.include_router(chat_router.router,   prefix="/api/chat",               tags=
 app.include_router(audit_router.router,  prefix="/api/admin/audit",        tags=["审计日志"])
 app.include_router(system_router.router, prefix="/api/admin/system",       tags=["系统配置"])
 app.include_router(eval_router.router,   prefix="/api/eval",               tags=["评测"])
+app.include_router(reimb_router.router,  prefix="/api/reimbursements",     tags=["报销申请"])
+app.include_router(traces_router.router, prefix="/api/admin/traces",       tags=["Agent Trace"])
+app.include_router(tickets_router.router, prefix="/api/tickets",           tags=["IT 工单"])
 
 
 # ------------------------------------------------------------------

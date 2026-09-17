@@ -10,7 +10,7 @@ import enum
 from typing import Optional, List
 
 from sqlalchemy import (
-    BigInteger, Boolean, DateTime, Enum, ForeignKey,
+    BigInteger, Boolean, DateTime, Enum, Float, ForeignKey,
     Index, Integer, String, Text, func,
 )
 from sqlalchemy.dialects.postgresql import INET, JSONB, UUID
@@ -91,6 +91,8 @@ class User(Base):
         Enum(UserRole, name="user_role", values_callable=lambda x: [e.value for e in x]),
         nullable=False, default=UserRole.employee
     )
+    # 职级：预审按职级取报销标准（junior / mid / senior / lead）
+    job_level:            Mapped[str]           = mapped_column(String(20), nullable=False, default="mid")
     password_hash:        Mapped[str]           = mapped_column(String(255), nullable=False)
     must_change_password: Mapped[bool]          = mapped_column(Boolean, nullable=False, default=True)
     is_active:            Mapped[bool]          = mapped_column(Boolean, nullable=False, default=True)
@@ -430,4 +432,137 @@ class ItTicket(Base):
     __table_args__ = (
         Index("idx_it_tickets_user_id", "user_id"),
         Index("idx_it_tickets_status", "status"),
+    )
+
+
+# =============================================
+# reimbursement_rules / limits / requests
+# =============================================
+
+class ReimbursementRule(Base):
+    """报销标准：与制度文档数值保持一致，供 precheck 精确校验。"""
+    __tablename__ = "reimbursement_rules"
+
+    id:         Mapped[int]  = mapped_column(Integer, primary_key=True)
+    category:   Mapped[str]  = mapped_column(String(50), nullable=False)
+    job_level:  Mapped[str]  = mapped_column(String(20), nullable=False)
+    daily_max:  Mapped[int]  = mapped_column(Integer, nullable=False)
+    annual_max: Mapped[int]  = mapped_column(Integer, nullable=False)
+    doc_ref:    Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    __table_args__ = (
+        Index("uq_rules_cat_level", "category", "job_level", unique=True),
+    )
+
+
+class ReimbursementLimit(Base):
+    """员工年度额度占用。"""
+    __tablename__ = "reimbursement_limits"
+
+    id:         Mapped[int]  = mapped_column(Integer, primary_key=True)
+    user_id:    Mapped[int]  = mapped_column(ForeignKey("users.id"), nullable=False)
+    category:   Mapped[str]  = mapped_column(String(50), nullable=False)
+    annual_max: Mapped[int]  = mapped_column(Integer, nullable=False)
+    used:       Mapped[int]  = mapped_column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        Index("uq_limit_user_cat", "user_id", "category", unique=True),
+    )
+
+
+class ReimbursementRequest(Base):
+    """报销申请单。status: draft/pending/approved/rejected/cancelled"""
+    __tablename__ = "reimbursement_requests"
+
+    id:              Mapped[int]  = mapped_column(BigInteger, primary_key=True)
+    request_no:      Mapped[str]  = mapped_column(String(50), nullable=False, unique=True)
+    user_id:         Mapped[int]  = mapped_column(ForeignKey("users.id"), nullable=False)
+    dept_id:         Mapped[Optional[int]] = mapped_column(ForeignKey("departments.id"), nullable=True)
+    category:        Mapped[str]  = mapped_column(String(50), nullable=False)
+    amount:          Mapped[int]  = mapped_column(Integer, nullable=False)
+    days:            Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    trip_start:      Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    trip_end:        Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    approval_ref:    Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    precheck_result: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    status:          Mapped[str]  = mapped_column(String(20), nullable=False, default="draft")
+    idempotency_key: Mapped[str]  = mapped_column(String(255), nullable=False, unique=True)
+    approver_id:     Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    approver_comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    decided_at:      Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at:      Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at:      Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("idx_reimb_user_status", "user_id", "status"),
+        Index("idx_reimb_dept_status", "dept_id", "status"),
+    )
+
+
+# =============================================
+# agent_traces（节点级追踪）
+# =============================================
+
+class AgentTrace(Base):
+    __tablename__ = "agent_traces"
+
+    id:              Mapped[int]  = mapped_column(BigInteger, primary_key=True)
+    conversation_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
+    )
+    user_id:         Mapped[int]  = mapped_column(Integer, nullable=False)
+    query:           Mapped[str]  = mapped_column(Text, nullable=False)
+    intent:          Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    rewritten_query: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    steps:           Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    tool_calls:      Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    final_answer:    Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    sources:         Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    llm_model:       Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    total_latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    error:           Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at:      Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("idx_agent_traces_user", "user_id", "created_at"),
+        Index("idx_agent_traces_conv", "conversation_id"),
+    )
+
+
+# =============================================
+# qa_records（问答记录，供知识缺口分析）
+# =============================================
+
+class QARecord(Base):
+    __tablename__ = "qa_records"
+
+    id:              Mapped[int]  = mapped_column(BigInteger, primary_key=True)
+    conversation_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    user_id:         Mapped[int]  = mapped_column(Integer, nullable=False)
+    dept_id:         Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    query:           Mapped[str]  = mapped_column(Text, nullable=False)
+    intent:          Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    top1_score:      Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    doc_hit:         Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    answer_preview:  Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    feedback:        Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    feedback_reason: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    latency_ms:      Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    is_gap:          Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    gap_resolved:    Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at:      Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("idx_qa_user_created", "user_id", "created_at"),
+        Index("idx_qa_gap", "is_gap", "gap_resolved"),
     )
