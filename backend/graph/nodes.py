@@ -181,33 +181,6 @@ async def sync_node(state: RAGState) -> dict:
 #  4. 检索节点
 # ══════════════════════════════════════════════
 
-async def _rewrite_query(query: str, history: list, user_role: str | None = None) -> str:
-    """多轮追问改写：把「那出差补贴呢」补全成语义完整问题。失败降级原 query。"""
-    if not history:
-        return query
-    hist_text = "\n".join(f"{h['role']}: {h['content']}" for h in history[-4:])
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "根据对话历史，把用户最新的问题改写成独立、完整、可检索的一句话。"
-                "只输出改写后的问题，不要解释。若原问题已完整，原样输出。"
-            ),
-        },
-        {"role": "user", "content": f"对话历史：\n{hist_text}\n\n最新问题：{query}"},
-    ]
-    try:
-        rewritten = await chat_complete(
-            messages, temperature=0, max_tokens=80, user_role=user_role,
-        )
-        rewritten = (rewritten or "").strip().strip('"')
-        if 2 <= len(rewritten) <= 200:
-            return rewritten
-    except Exception as exc:
-        logger.debug(f"[rewrite] 改写失败，使用原 query: {describe_exc(exc)}")
-    return query
-
-
 async def retrieve_docs_node(state: RAGState) -> dict:
     """
     用 query_understand 产出的 rewritten_query 做混合检索（向量 + 关键词 RRF）。

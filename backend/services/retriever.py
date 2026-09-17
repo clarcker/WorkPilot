@@ -134,26 +134,6 @@ async def _keyword_search(
             SELECT
                 dc.id AS chunk_id, dc.doc_id, dc.content, dc.heading,
                 dc.page_no, dc.chunk_index, d.file_name,
-                ts_rank_cd(dc.content_tsv, query) AS rank
-            FROM (
-                SELECT to_tsquery('simple', :tsq) AS query
-            ) q,
-            LATERAL (
-                SELECT dc.*, d.file_name
-                FROM doc_chunks dc
-                JOIN documents d ON d.id = dc.doc_id
-                WHERE d.status = 'ready'
-                  AND ({vis_clause})
-                  AND dc.content_tsv @@ q.query
-                ORDER BY ts_rank_cd(dc.content_tsv, q.query) DESC
-                LIMIT :candidate_k
-            ) dc
-        """)
-        # 上面 LATERAL 写法较绕，改用简单两段
-        sql = text(f"""
-            SELECT
-                dc.id AS chunk_id, dc.doc_id, dc.content, dc.heading,
-                dc.page_no, dc.chunk_index, d.file_name,
                 ts_rank_cd(dc.content_tsv, to_tsquery('simple', :tsq)) AS rank
             FROM doc_chunks dc
             JOIN documents d ON d.id = dc.doc_id
@@ -316,43 +296,43 @@ async def retrieve(
 
         vec_ids = [r["chunk_id"] for r in vec_rows]
         kw_ids = [r["chunk_id"] for r in kw_rows]
-        fused = rrf_fuse(vec_ids, kw_ids)
 
-        # 构建 chunk_id → meta
+        # 构建 chunk_id → meta；score 用于展示，rrf_score 用于排序
         meta: dict[int, dict] = {}
-        for i, r in enumerate(vec_rows):
+        rrf_scores: dict[int, float] = {}
+        for w, ranked in ((0.7, vec_ids), (0.3, kw_ids)):
+            for rank, cid in enumerate(ranked, 1):
+                rrf_scores[cid] = rrf_scores.get(cid, 0.0) + w / (60 + rank)
+
+        for r in vec_rows:
             meta[r["chunk_id"]] = {
                 **r,
                 "vec_score": float(r.get("score") or 0),
                 "kw_rank": None,
                 "score": float(r.get("score") or 0),
+                "rrf_score": rrf_scores.get(r["chunk_id"], 0.0),
             }
         for i, r in enumerate(kw_rows):
             cid = r["chunk_id"]
             if cid in meta:
                 meta[cid]["kw_rank"] = i + 1
-                # RRF 分覆盖，供排序
-                meta[cid]["score"] = meta[cid].get("score", 0) + 0.001 * (1.0 / (60 + i + 1))
             else:
+                # 纯关键词命中：score 用 ts_rank（仅排序展示），rrf_score 单独保留
                 meta[cid] = {
                     **r,
                     "vec_score": None,
                     "kw_rank": i + 1,
-                    "score": 0.3 * (1.0 / (60 + i + 1)),
+                    "score": float(r.get("rank") or 0),
+                    "rrf_score": rrf_scores.get(cid, 0.0),
                     "file_name": r.get("file_name"),
                 }
 
-        # RRF 排序取 top_k 候选再合并
-        ordered = []
-        for cid in fused:
-            if cid in meta:
-                ordered.append(meta[cid])
-            if len(ordered) >= top_k * 2:
-                break
-        # 补上未进 fused 的（理论上不该发生）
-        for cid, m in meta.items():
-            if cid not in {x["chunk_id"] for x in ordered}:
-                ordered.append(m)
+        # RRF 排序
+        ordered = sorted(
+            meta.values(),
+            key=lambda m: m.get("rrf_score") or 0,
+            reverse=True,
+        )
 
         chunks = await _merge_chunks(db, ordered[: top_k * 3])
 

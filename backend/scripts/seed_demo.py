@@ -15,9 +15,13 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 
 load_dotenv()
+
+from core.config import settings  # noqa: E402
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -234,8 +238,176 @@ async def main() -> None:
         print("报销额度已写入")
         await db.commit()
 
+    # ── 场景 D：制度文档（四级可见性）────────────────────────
+    await seed_documents(engine, dept_ids, user_ids)
+
     await engine.dispose()
     print("seed_demo 完成")
+
+
+# 场景 D 文档清单：文件名 → (visibility, dept_code 或 None, specific_usernames)
+# 来源：仓库根目录 test/*.md
+DOC_SPECS = [
+    ("报销管理制度.md",           "global",         None, []),
+    ("考勤与休假制度.md",         "global",         None, []),
+    ("新员工入职指南.md",         "global",         None, []),
+    ("信息安全与合规制度.md",     "global",         None, []),
+    ("IT设备与运维服务规范.md",   "non_customer",   None, []),          # 客服不可见
+    ("薪酬调整实施方案-受限.md",  "specific_users", "RD", ["zhangsan", "rdadmin"]),  # 白名单
+]
+
+
+async def seed_documents(engine, dept_ids: dict[str, int], user_ids: dict[str, int]) -> None:
+    """
+    把 test/ 下制度文档灌入 documents + doc_chunks + embeddings。
+
+    幂等：同名 ready 文档跳过；需要重建请先归档或改用 reindex 接口。
+    """
+    import shutil
+    import sys
+    from pathlib import Path
+
+    backend_root = Path(__file__).resolve().parents[1]
+    project_root = backend_root.parent
+    src_dir = project_root / "test"
+    upload_dir = Path(settings.upload_dir)
+    if not str(upload_dir):
+        upload_dir = backend_root / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    if not src_dir.exists():
+        print(f"[warn] 未找到 {src_dir}，跳过文档 seed")
+        return
+
+    # 延迟导入，避免 seed 纯数据时强依赖 Ollama
+    from sqlalchemy import select
+    from db.models import DocChunk, DocPermission, DocStatus, Document, DocVisibility, Embedding
+    from services.chunker import chunk_segments
+    from services.document_parser import parse_document
+    from services.embedder import get_embeddings_batch
+    from services.fts import tokenize_for_search
+
+    Session = async_sessionmaker(bind=engine, expire_on_commit=False)
+    admin_id = user_ids.get("rdadmin") or next(iter(user_ids.values()))
+
+    async with Session() as db:
+        for fname, visibility, dept_code, whitelist in DOC_SPECS:
+            src = src_dir / fname
+            if not src.exists():
+                print(f"[warn] 缺少 {src}，跳过")
+                continue
+
+            existing = await db.scalar(
+                select(Document).where(
+                    Document.file_name == fname,
+                    Document.status == DocStatus.ready,
+                )
+            )
+            if existing:
+                # 场景 D：校正已有文档的可见性 / 白名单，保证演示可复现
+                changed = False
+                if existing.visibility.value != visibility:
+                    existing.visibility = DocVisibility(visibility)
+                    changed = True
+                if visibility == "specific_users":
+                    for uname in whitelist:
+                        uid = user_ids.get(uname)
+                        if not uid:
+                            continue
+                        has = await db.scalar(
+                            select(DocPermission).where(
+                                DocPermission.doc_id == existing.id,
+                                DocPermission.user_id == uid,
+                            )
+                        )
+                        if not has:
+                            db.add(DocPermission(
+                                doc_id=existing.id,
+                                user_id=uid,
+                                granted_by=admin_id,
+                            ))
+                            changed = True
+                if changed:
+                    await db.commit()
+                    print(f"  已校正可见性: {fname} → {visibility}")
+                else:
+                    print(f"  文档已存在，跳过: {fname}")
+                continue
+
+            dest = upload_dir / fname
+            shutil.copy2(src, dest)
+
+            dept_id = dept_ids.get(dept_code) if dept_code else dept_ids["HR"]
+            if not dept_id:
+                dept_id = next(iter(dept_ids.values()))
+
+            doc = Document(
+                file_name=fname,
+                file_size=src.stat().st_size,
+                file_type="md",
+                storage_path=str(dest),
+                dept_id=dept_id,
+                visibility=DocVisibility(visibility),
+                status=DocStatus.processing,
+                category="制度",
+                version="v1",
+                uploaded_by=admin_id,
+            )
+            db.add(doc)
+            await db.flush()
+
+            try:
+                segments = parse_document(str(dest), "md")
+                chunks_data = chunk_segments(segments)
+                texts = [c["content"] for c in chunks_data]
+                embeddings_list = await get_embeddings_batch(texts)
+
+                for chunk_data, vec in zip(chunks_data, embeddings_list):
+                    chunk = DocChunk(
+                        doc_id=doc.id,
+                        chunk_index=chunk_data["chunk_index"],
+                        content=chunk_data["content"],
+                        page_no=chunk_data["page_no"],
+                        heading=chunk_data["heading"],
+                        token_count=len(chunk_data["content"]),
+                    )
+                    db.add(chunk)
+                    await db.flush()
+                    tok = tokenize_for_search(chunk_data["content"])
+                    if tok:
+                        from sqlalchemy import text as sa_text
+                        await db.execute(
+                            sa_text(
+                                "UPDATE doc_chunks SET content_tsv = "
+                                "to_tsvector('simple', :tok) WHERE id = :id"
+                            ),
+                            {"tok": tok, "id": chunk.id},
+                        )
+                    db.add(Embedding(
+                        chunk_id=chunk.id,
+                        doc_id=doc.id,
+                        dept_id=dept_id,
+                        embedding=vec,
+                        model_name=settings.ollama_embed_model,
+                    ))
+
+                # specific_users 白名单
+                if visibility == "specific_users":
+                    for uname in whitelist:
+                        uid = user_ids.get(uname)
+                        if uid:
+                            db.add(DocPermission(
+                                doc_id=doc.id,
+                                user_id=uid,
+                                granted_by=admin_id,
+                            ))
+
+                doc.status = DocStatus.ready
+                await db.commit()
+                print(f"  已入库: {fname} | visibility={visibility} | chunks={len(chunks_data)}")
+            except Exception as exc:
+                await db.rollback()
+                print(f"[error] 文档入库失败 {fname}: {exc}")
 
 
 if __name__ == "__main__":
