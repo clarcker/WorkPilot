@@ -338,6 +338,6 @@ async def retrieve(
 
     logger.debug(
         f"[retriever] user={user_id} vec={len(vec_rows)} kw={len(kw_rows)} "
-        f"fused={len(fused)} merged={len(chunks)}"
+        f"merged={len(chunks)}"
     )
     return chunks[:top_k]

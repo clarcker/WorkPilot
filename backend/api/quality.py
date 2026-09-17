@@ -1,10 +1,11 @@
-"""评测结果落库 + 列表对比 + 用户反馈 + 知识缺口。"""
+"""评测结果查询 + 用户反馈 + 知识缺口。
+
+落库入口统一在 POST /api/eval/run（eval.py），本模块只读 eval_runs。
+"""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +18,7 @@ router = APIRouter()
 
 
 class FeedbackBody(BaseModel):
-    feedback: str  # up | down
+    feedback: str = Field(..., pattern="^(up|down)$")
     reason: str | None = None  # answer_wrong / citation_wrong / not_found / other
 
 
@@ -25,36 +26,7 @@ class GapResolveBody(BaseModel):
     resolved: bool = True
 
 
-@router.post("/runs", response_model=BaseResp[dict])
-async def create_eval_run(
-    body: dict,
-    current_user: User = Depends(require_super_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    """eval runner 调用：保存一次评测结果。body 为 run_eval 返回的 report dict。"""
-    run = EvalRun(
-        finished_at=datetime.now(timezone.utc),
-        total_cases=body.get("total_cases") or 0,
-        scored_cases=body.get("scored_cases") or 0,
-        timeout_count=body.get("timeout_count") or 0,
-        intent_accuracy=body.get("intent_accuracy"),
-        doc_hit_rate=body.get("doc_hit_rate"),
-        tool_call_accuracy=body.get("tool_call_accuracy"),
-        citation_rate=body.get("citation_rate"),
-        permission_pass_rate=body.get("permission_pass_rate"),
-        avg_latency_ms=body.get("avg_latency_ms"),
-        skip_generation=body.get("skip_generation", True),
-        tool_dry_run=body.get("tool_dry_run", True),
-        case_results=body.get("case_results"),
-        failed_cases=body.get("failed_cases"),
-        operator_id=current_user.id,
-        note=body.get("note"),
-    )
-    db.add(run)
-    await db.commit()
-    await db.refresh(run)
-    return BaseResp.ok({"run_id": run.id})
-
+# ── 评测结果查询（落库由 /api/eval/run 完成）──────────────────
 
 @router.get("/runs", response_model=BaseResp[list[dict]])
 async def list_eval_runs(
