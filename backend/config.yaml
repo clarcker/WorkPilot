@@ -33,7 +33,8 @@ tool_timeout: 15.0
 retrieval_top_k: 5
 retrieval_min_score: 0.25
 retrieval_enable_fts: true
-retrieval_must_include: true
+# E5：对照实验显示 kw 配额与纯 RRF mrr 相同（差 0），默认关闭
+retrieval_must_include: false
 retrieval_merge_chunks: true
 retrieval_rrf_k: 60
 retrieval_w_vec: 0.7

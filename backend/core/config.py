@@ -100,7 +100,8 @@ class Settings(BaseSettings):
     retrieval_top_k: int = 5
     retrieval_min_score: float = 0.25
     retrieval_enable_fts: bool = True
-    retrieval_must_include: bool = True
+    # E5 默认关闭：配额与纯 RRF 在对照中 mrr 无差
+    retrieval_must_include: bool = False
     retrieval_merge_chunks: bool = True
     retrieval_rrf_k: int = 60
     retrieval_w_vec: float = 0.7

@@ -328,6 +328,8 @@ async def retrieve(
     min_score: float | None = None,
 ) -> list[RetrievedChunk]:
     """混合检索入口。query_text 为空时退化为纯向量。"""
+    from core.config import maybe_reload_settings
+    maybe_reload_settings()
     top_k = top_k if top_k is not None else settings.retrieval_top_k
     min_score = min_score if min_score is not None else settings.retrieval_min_score
     cand_k = _candidate_k(top_k)
@@ -376,31 +378,34 @@ async def retrieve(
                     "file_name": r.get("file_name"),
                 }
 
-        must_ids: set[int] = set()
-        if settings.retrieval_must_include:
-            must_ids = set(vec_ids[:3]) | set(kw_ids[:3])
-        for m in meta.values():
-            m["must_include"] = m["chunk_id"] in must_ids
-
+        # E5：不再 must 优先排序；改为关键词配额（默认至少 2 条 kw 命中进入 top_k）
+        kw_quota = 2 if settings.retrieval_must_include else 0
         ordered = sorted(
             meta.values(),
             key=lambda m: m.get("rrf_score") or 0,
             reverse=True,
         )
-        if settings.retrieval_must_include:
-            ordered = sorted(
-                meta.values(),
-                key=lambda m: (
-                    0 if m.get("must_include") else 1,
-                    -(m.get("rrf_score") or 0),
-                ),
-            )
+        if kw_quota > 0 and kw_ids:
+            top = ordered[:top_k]
+            top_kw = [m for m in top if m.get("kw_rank") is not None]
+            if len(top_kw) < kw_quota:
+                # 从 RRF 序中取尚未进入 top 的关键词命中，替换末位非 kw
+                rest_kw = [
+                    m for m in ordered[top_k:]
+                    if m.get("kw_rank") is not None
+                ][: kw_quota - len(top_kw)]
+                non_kw_tail = [i for i, m in enumerate(top) if m.get("kw_rank") is None]
+                for m in rest_kw:
+                    if not non_kw_tail:
+                        break
+                    top[non_kw_tail.pop()] = m
+                ordered = top + [m for m in ordered[top_k:] if m not in top]
 
         chunks = await _merge_chunks(db, ordered[: max(top_k * 4, 20)])
 
     logger.debug(
         f"[retriever] user={user_id} vec={len(vec_rows)} kw={len(kw_rows)} "
-        f"merged={len(chunks)} must={settings.retrieval_must_include} "
+        f"merged={len(chunks)} kw_quota={kw_quota} "
         f"out={[c['chunk_id'] for c in chunks[:5]]}"
     )
     return chunks[:top_k]
