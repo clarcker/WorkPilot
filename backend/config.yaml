@@ -30,8 +30,8 @@ llm_stream_timeout: 300.0
 tool_timeout: 15.0
 
 # 检索：最终 TopK 与相似度阈值；候选扩展由代码 clamp(top_k*20, 50, 200)
-retrieval_top_k: 5
-retrieval_min_score: 0.3
+retrieval_top_k: 8
+retrieval_min_score: 0.25
 retrieval_enable_fts: true
 
 # ── 上传 ───────────────────────────────────────────────────────

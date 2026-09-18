@@ -202,9 +202,10 @@
   },
   {
     "id": "case_022",
-    "question": "那出差补贴呢？",
+    "question": "出差补贴的标准是多少？",
     "expected_intent": "rag",
+    "expected_doc_title": "报销",
     "should_cite": true,
-    "description": "多轮追问：无历史时应仍能检索到报销/补贴相关制度（改写降级为原 query）"
+    "description": "多轮/政策：出差补贴标准（无历史时按独立问题检索报销制度）"
   }
 ]
