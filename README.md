@@ -1,120 +1,122 @@
 # WorkPilot v2 — 企业员工事务办理 Agent
 
-面向企业员工的事务办理 Agent：能查制度、能算额度、能办申请、能走审批、可全程回溯。基于 FastAPI + LangGraph + PostgreSQL/pgvector 构建，核心能力：
+面向企业员工的事务办理 Agent：能查制度、能算额度、能办申请、能走审批、可全程回溯。基于 FastAPI + LangGraph + PostgreSQL/pgvector 构建。
 
-- **RAG 制度问答**：四级文档权限在同一条 SQL 内过滤，无权文档不参与召回也不透露存在
-- **企业工具调用**：权限校验 + 幂等 + 审计，LLM 只负责决策和解释，数值校验由代码完成
-- **事务办理闭环**：报销预审 → 缺信息追问 → 人工确认 → 提交 → 管理员审批（见 [业务场景设计](docs/业务场景设计.md)）
-- **可观测与可回归**：节点级 trace、golden case 评测、用户反馈驱动的知识缺口分析
+- **RAG 制度问答**：四级文档权限在同一条 SQL 内过滤；向量 + 关键词 RRF 混合检索
+- **企业工具调用**：权限 + 幂等 + 审计；LLM 决策解释，数值校验由代码完成
+- **事务办理闭环**：报销预审 → 缺信息追问 → 人工确认 → 提交 → 部门审批
+- **可观测与可回归**：节点级 trace、golden case 评测落库、知识缺口反馈
 
-> 当前正在按 [docs/业务场景设计.md](docs/业务场景设计.md) 推进场景 A（报销申请）与配套工程能力，进度见下方「功能状态」。
+进度与设计见 [docs/业务场景设计.md](docs/业务场景设计.md) 与 [docs/检索链路升级需求.md](docs/检索链路升级需求.md)。
 
 ## 快速启动
 
 ```powershell
 # Windows（在 v2/ 目录）
-.\start.ps1     # 启动所有服务
-.\stop.ps1      # 停止所有服务
-```
+.\dev.ps1 start          # postgres(Docker) + 后端 + 前端；Ollama 用本机
 
-启动后访问：
+cd backend
+uv run alembic upgrade head
+uv run python scripts/seed_demo.py    # 部门/用户/规则/额度/制度文档
+```
 
 | 地址 | 说明 |
 |---|---|
-| http://localhost:5173 | 前端界面 |
-| http://localhost:8000/docs | Swagger API 文档 |
+| http://localhost:5173 | 前端 |
+| http://localhost:8000/docs | Swagger |
 | http://localhost:8000/health | 健康检查 |
 
-初始管理员：`admin` / `Admin@123`（首次登录强制改密）
+**演示账号**（`seed_demo.py`，密码 `Demo@12345`）：
+
+| 用户 | 角色 | 用途 |
+|---|---|---|
+| zhangsan | employee / senior 研发 | 报销超标特批演示 |
+| rdadmin | dept_admin 研发 | 审批本部门 / 工单处理 |
+| admin | super_admin | 超管（初始密码见 `.env`） |
 
 ## 技术栈
 
 | 层 | 技术 |
 |---|---|
-| 后端 | Python 3.11 · FastAPI · Gunicorn + Uvicorn |
-| Agent 工作流 | LangGraph |
-| 数据库 | PostgreSQL 14 + pgvector |
-| 本地模型 | Ollama（qwen2.5:7b 推理 + nomic-embed-text 向量化） |
+| 后端 | Python 3.11+ · FastAPI · uv |
+| Agent | LangGraph（工具多步循环） |
+| 数据库 | PostgreSQL + pgvector + tsvector（jieba 分词） |
+| 模型 | Ollama 本地（qwen2.5:7b / nomic-embed-text）；可配外部 API + 管理员分档 |
 | 前端 | React + Ant Design |
-| 部署 | Docker Compose |
+| 配置 | `config.yaml`（业务）+ `.env`（密钥） |
 
 ## 架构
 
 ```
 用户问题
-  → 脱敏节点（PII 替换，仅用于外部 LLM）‖ 意图分类（闲聊 / RAG）   ← 并行
-  → 权限过滤向量检索（pgvector）
-  → 工具决策 → 权限校验 → 工具执行（写操作前人工确认）
-  → LLM 生成回答（Ollama qwen2.5:7b，带引用来源）
-  → SSE 流式推送
+  → anonymize ∥ query_understand   # PII 记录；intent + 查询改写一次调用
+  → 混合检索：向量候选扩展 ∥ jieba 关键词 → RRF → 分块合并（权限 SQL 内过滤）
+  → decide_tool ⇄ execute_tool      # 多步循环；写操作 draft + confirm_required
+  → generate_answer                 # 制度 + 工具结果注入 prompt
+  → llm_client 出口脱敏（仅外部 API）
+  → SSE：token / sources / tool_call / confirm_required / form_incomplete / qa_id
 ```
 
 ## 文档
 
 | 文档 | 说明 |
 |---|---|
-| [docs/API文档.md](docs/API文档.md) | 接口说明、错误码、测试流程 |
-| [docs/需求文档.md](docs/需求文档.md) | 完整产品需求 |
-| [docs/系统架构.md](docs/系统架构.md) | 架构决策与约束 |
-| [docs/数据库设计.md](docs/数据库设计.md) | 数据库设计说明 |
-| [docs/业务场景设计.md](docs/业务场景设计.md) | 业务场景设计、工程需求清单、实施顺序、设计决策说明 |
-| http://localhost:8000/docs | Swagger（始终与代码同步） |
+| [docs/API文档.md](docs/API文档.md) | 接口、SSE 事件、错误码 |
+| [docs/业务场景设计.md](docs/业务场景设计.md) | 场景 A–E、P0/P1 进度、设计决策 |
+| [docs/检索链路升级需求.md](docs/检索链路升级需求.md) | R0–R5 检索升级与 eval 基线 |
+| [docs/系统架构.md](docs/系统架构.md) | 架构约束 |
+| [docs/数据库设计.md](docs/数据库设计.md) | 表结构决策 |
 
-## 开发
-
-```bash
-# 后端（在 backend/ 目录）
-uv sync
-uv run fastapi dev main.py
-
-# 前端（在 frontend/ 目录）
-npm install
-npm run dev
-```
-
-## 功能状态
+## 功能状态（2026-09-18）
 
 | 功能 | 状态 |
 |---|---|
-| 用户认证（JWT + bcrypt + 三级角色） | ✅ |
-| 部门管理 | ✅ |
-| 文档上传 + 解析 + 向量化 | ✅ |
-| RAG 问答 + SSE 流式输出 + 引用来源 | ✅ |
-| 前端：聊天 + 历史 + 管理后台 | ✅ |
-| 审计日志（写入） | ✅ |
-| 工具调用（3 个企业工具 + 权限校验 + 幂等） | ✅ |
-| 评测回归（golden cases + 指标） | ✅ 基础版 |
-| PII 脱敏（密钥/身份证/手机号/邮箱） | ✅ |
-| 场景 A：报销申请预审 → 确认 → 提交 → 审批 | 🚧 进行中 |
-| Agent 多步循环 + checkpointer + 人工确认（interrupt） | 🚧 进行中 |
-| 节点级 trace | ⏳ |
-| 多轮查询改写 | ⏳ |
-| 场景 B：IT 工单闭环 | ⏳ |
-| 场景 C：知识缺口分析 + 用户反馈 | ⏳ |
-| 评测升级（Recall@K、LLM-as-judge、结果落库对比） | ⏳ |
-| 混合检索（向量 + 全文 RRF） | ⏳ |
+| 认证 / 三级角色 / 部门 / 文档管理 | ✅ |
+| RAG + SSE + 引用来源 | ✅ |
+| 混合检索 RRF + 查询改写 + 分块合并 | ✅ |
+| 模型分档 + 配置热加载 + 出口脱敏 | ✅ |
+| 场景 A：报销预审→确认→审批 | ✅ |
+| 场景 B：IT 工单闭环（创建/查询/后台处理） | ✅ |
+| 场景 C：知识缺口 + 👍/👎 反馈 | ✅ |
+| 场景 D：文档四级可见性 seed | ✅ |
+| 节点级 trace + 管理后台 | ✅ |
+| 评测 22 case + eval_runs 落库 | ✅ **intent/doc_hit/tool/citation/permission = 1.0** |
+| LangGraph Postgres checkpointer | ⚠️ 用 draft+confirm API 替代 |
+| R5 重排 / Recall@5 / LLM-as-judge | ⬜ |
+| 运维 / 客服 Agent | ⬜ Roadmap |
 
-## Roadmap
+## 工具一览
 
-在员工事务 Agent 稳定后，基于同一套权限 / 工具 / 审计基础设施扩展：运维监控 Agent（SSH 采集 + 告警 + 人工确认执行）、对外客服 Agent（API Key 体系）。
-
-## 工具调用
-
-系统支持 3 个企业工具：
-
-| 工具 | 说明 | 权限 |
-|---|---|---|
-| query_employee_profile | 查询员工基本信息 | 所有角色（只能查自己） |
-| query_reimbursement_limit | 查询报销额度 | 所有角色（只能查自己） |
-| create_it_ticket | 创建 IT 工单（幂等） | 所有角色 |
-
-调用流程：用户提问 → 意图识别 → 检索 → LLM 判断工具需求 → 权限校验 → 执行 → 生成回答
+| 工具 | 类型 |
+|---|---|
+| query_employee_profile | 读 DB，员工只能查自己 |
+| query_reimbursement_limit | 读 DB 额度 |
+| precheck_reimbursement | 纯代码算超标/额度 |
+| submit_reimbursement_request | 写 + 幂等 + requires_confirmation |
+| query_my_reimbursements | 我的报销进度 |
+| create_it_ticket / query_my_tickets | IT 工单创建与查询 |
 
 ## 评测
 
-```bash
-curl -X POST http://localhost:8000/api/eval/run \
+```powershell
+# 超管 token
+curl -X POST "http://localhost:8000/api/eval/run?skip_generation=true&tool_dry_run=true" `
   -H "Authorization: Bearer <super_admin_token>"
 ```
 
-指标：意图准确率、文档命中率、工具调用准确率、引用覆盖率
+- 指标：intent / doc_hit / tool_call / citation / permission
+- 结果自动写入 `eval_runs`；`GET /api/quality/runs` 对比历史
+- 最新基线（2026-09-18）：**22/22 全通过**
+
+## 配置
+
+| 文件 | 内容 |
+|---|---|
+| `backend/config.yaml` | LLM 提供商、超时、检索 top_k、限流等 |
+| `backend/.env` | JWT 密钥、数据库 URL、OPENAI_API_KEY |
+
+优先级：环境变量 > `.env` > `config.yaml` > 代码默认值。改 yaml/env 后后端自动热加载。
+
+## Roadmap
+
+员工事务链路稳定后扩展：运维监控 Agent、对外客服 Agent（同一套权限/工具/审计基础设施）。
