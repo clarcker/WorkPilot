@@ -14,3 +14,7 @@ __pycache__/
 backend/logs/
 backend/uploads/
 scripts_split_admin.py
+
+# 旧语料目录，已迁至 backend/seed_docs/
+/test/
+docs/problem-solving-log-*.md

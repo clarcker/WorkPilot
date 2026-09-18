@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from pathlib import Path
 
 import bcrypt
 from sqlalchemy import select, text
@@ -254,41 +255,43 @@ async def main() -> None:
     print("seed_demo 完成")
 
 
-# 场景 D 文档清单：文件名 → (visibility, dept_code 或 None, specific_usernames)
-# 来源：仓库根目录 test/*.md
-DOC_SPECS = [
-    ("报销管理制度.md",           "global",         None, []),
-    ("考勤与休假制度.md",         "global",         None, []),
-    ("新员工入职指南.md",         "global",         None, []),
-    ("信息安全与合规制度.md",     "global",         None, []),
-    ("IT设备与运维服务规范.md",   "non_customer",   None, []),          # 客服不可见
-    ("薪酬调整实施方案-受限.md",  "specific_users", "RD", ["zhangsan", "rdadmin"]),  # 白名单
-]
+# 场景 D + E1 干扰文档：从 seed_docs/manifest.json 读取
+SEED_DOCS_DIR = Path(__file__).resolve().parents[1] / "seed_docs"
+MANIFEST_PATH = SEED_DOCS_DIR / "manifest.json"
+
+
+def _load_doc_specs() -> list[dict]:
+    if not MANIFEST_PATH.exists():
+        print(f"[warn] 未找到 {MANIFEST_PATH}，跳过文档 seed")
+        return []
+    import json
+    data = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    return data.get("docs") or []
 
 
 async def seed_documents(engine, dept_ids: dict[str, int], user_ids: dict[str, int]) -> None:
     """
-    把 test/ 下制度文档灌入 documents + doc_chunks + embeddings。
+    按 seed_docs/manifest.json 灌入 documents + doc_chunks + embeddings + tsv。
 
-    幂等：同名 ready 文档跳过；需要重建请先归档或改用 reindex 接口。
+    幂等：同名 ready 文档仅校正 visibility/白名单，不重复解析。
     """
     import shutil
-    import sys
     from pathlib import Path
 
     backend_root = Path(__file__).resolve().parents[1]
-    project_root = backend_root.parent
-    src_dir = project_root / "test"
+    src_dir = SEED_DOCS_DIR
     upload_dir = Path(settings.upload_dir)
-    if not str(upload_dir):
+    if not str(upload_dir) or str(upload_dir).startswith("/data"):
         upload_dir = backend_root / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
 
+    specs = _load_doc_specs()
+    if not specs:
+        return
     if not src_dir.exists():
         print(f"[warn] 未找到 {src_dir}，跳过文档 seed")
         return
 
-    # 延迟导入，避免 seed 纯数据时强依赖 Ollama
     from sqlalchemy import select
     from db.models import DocChunk, DocPermission, DocStatus, Document, DocVisibility, Embedding
     from services.chunker import chunk_segments
@@ -300,7 +303,12 @@ async def seed_documents(engine, dept_ids: dict[str, int], user_ids: dict[str, i
     admin_id = user_ids.get("rdadmin") or next(iter(user_ids.values()))
 
     async with Session() as db:
-        for fname, visibility, dept_code, whitelist in DOC_SPECS:
+        for spec in specs:
+            fname = spec["file"]
+            visibility = spec.get("visibility") or "global"
+            dept_code = spec.get("dept")
+            whitelist = spec.get("whitelist") or []
+
             src = src_dir / fname
             if not src.exists():
                 print(f"[warn] 缺少 {src}，跳过")
@@ -313,7 +321,6 @@ async def seed_documents(engine, dept_ids: dict[str, int], user_ids: dict[str, i
                 )
             )
             if existing:
-                # 场景 D：校正已有文档的可见性 / 白名单，保证演示可复现
                 changed = False
                 if existing.visibility.value != visibility:
                     existing.visibility = DocVisibility(visibility)
@@ -343,10 +350,12 @@ async def seed_documents(engine, dept_ids: dict[str, int], user_ids: dict[str, i
                     print(f"  文档已存在，跳过: {fname}")
                 continue
 
-            dest = upload_dir / fname
+            dest_dir = upload_dir / "seed"
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / fname
             shutil.copy2(src, dest)
 
-            dept_id = dept_ids.get(dept_code) if dept_code else dept_ids["HR"]
+            dept_id = dept_ids.get(dept_code) if dept_code else dept_ids.get("HR")
             if not dept_id:
                 dept_id = next(iter(dept_ids.values()))
 
@@ -358,7 +367,7 @@ async def seed_documents(engine, dept_ids: dict[str, int], user_ids: dict[str, i
                 dept_id=dept_id,
                 visibility=DocVisibility(visibility),
                 status=DocStatus.processing,
-                category="制度",
+                category=spec.get("category") or "制度",
                 version="v1",
                 uploaded_by=admin_id,
             )
@@ -400,7 +409,6 @@ async def seed_documents(engine, dept_ids: dict[str, int], user_ids: dict[str, i
                         model_name=settings.ollama_embed_model,
                     ))
 
-                # specific_users 白名单
                 if visibility == "specific_users":
                     for uname in whitelist:
                         uid = user_ids.get(uname)

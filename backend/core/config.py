@@ -96,10 +96,15 @@ class Settings(BaseSettings):
     llm_stream_timeout: float = 300.0
     tool_timeout: float = 15.0
 
-    # 检索（R2/R3）
+    # 检索（R2/R3 + E4 对照开关）
     retrieval_top_k: int = 5
-    retrieval_min_score: float = 0.3
+    retrieval_min_score: float = 0.25
     retrieval_enable_fts: bool = True
+    retrieval_must_include: bool = True
+    retrieval_merge_chunks: bool = True
+    retrieval_rrf_k: int = 60
+    retrieval_w_vec: float = 0.7
+    retrieval_w_kw: float = 0.3
 
     upload_dir: str = "/data/uploads"
     max_file_size_mb: int = 200

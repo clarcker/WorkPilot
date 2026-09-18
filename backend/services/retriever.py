@@ -38,19 +38,48 @@ def _candidate_k(top_k: int) -> int:
     return max(50, min(top_k * 20, 200))
 
 
-def rrf_fuse(
+def rrf_scores_map(
     vec_ids: list[int],
     kw_ids: list[int],
-    k: int = 60,
-    w_vec: float = 0.7,
-    w_kw: float = 0.3,
-) -> list[int]:
-    """RRF：只消费排名。"""
+    k: int | None = None,
+    w_vec: float | None = None,
+    w_kw: float | None = None,
+) -> dict[int, float]:
+    """RRF 融合分：唯一入口，权重/ k 读配置。"""
+    k = k if k is not None else settings.retrieval_rrf_k
+    w_vec = w_vec if w_vec is not None else settings.retrieval_w_vec
+    w_kw = w_kw if w_kw is not None else settings.retrieval_w_kw
     scores: dict[int, float] = {}
     for w, ranked in ((w_vec, vec_ids), (w_kw, kw_ids)):
         for rank, cid in enumerate(ranked, 1):
             scores[cid] = scores.get(cid, 0.0) + w / (k + rank)
+    return scores
+
+
+def rrf_fuse(
+    vec_ids: list[int],
+    kw_ids: list[int],
+    k: int | None = None,
+    w_vec: float | None = None,
+    w_kw: float | None = None,
+) -> list[int]:
+    """返回按 RRF 分降序的 chunk_id 列表。"""
+    scores = rrf_scores_map(vec_ids, kw_ids, k, w_vec, w_kw)
     return sorted(scores, key=lambda c: scores[c], reverse=True)
+
+
+async def _set_hnsw_params(db, cand_k: int) -> None:
+    """设置 HNSW 参数；失败用 savepoint 隔离，避免污染整条事务。"""
+    try:
+        async with db.begin_nested():
+            await db.execute(text(f"SET LOCAL hnsw.ef_search = {int(cand_k)}"))
+            await db.execute(text("SET LOCAL hnsw.iterative_scan = strict_order"))
+    except Exception:
+        try:
+            async with db.begin_nested():
+                await db.execute(text(f"SET LOCAL hnsw.ef_search = {int(cand_k)}"))
+        except Exception as exc:
+            logger.debug(f"[retriever] hnsw 参数设置失败，使用默认: {exc}")
 
 
 def _build_vis_clause(
@@ -85,14 +114,7 @@ async def _vector_search(
     cand_k: int,
     min_score: float,
 ) -> list[dict]:
-    try:
-        await db.execute(text(f"SET LOCAL hnsw.ef_search = {int(cand_k)}"))
-        await db.execute(text("SET LOCAL hnsw.iterative_scan = strict_order"))
-    except Exception:
-        try:
-            await db.execute(text(f"SET LOCAL hnsw.ef_search = {int(cand_k)}"))
-        except Exception:
-            pass
+    await _set_hnsw_params(db, cand_k)
 
     sql = text(f"""
         SELECT
@@ -196,14 +218,27 @@ async def _merge_chunks(
                 group = [cur]
         merged.append(_flatten_group(group))
 
-    # 短块补邻
+    # 短块补邻：prev + cur + next，尾部 overlap 去重
     expanded: list[dict] = []
     for m in merged:
         if len(m["content"]) < short_threshold:
-            neighbors = await _fetch_neighbors(db, m["doc_id"], m["chunk_index"])
-            if neighbors:
-                m = {**m, "content": "\n".join(neighbors + [m["content"]])}
+            prev_list, next_list = await _fetch_neighbors(
+                db, m["doc_id"], m.get("chunk_index") or 0
+            )
+            parts = []
+            for p in prev_list:
+                parts.append(_strip_tail_overlap(p, m["content"]))
+            parts.append(m["content"])
+            for n in next_list:
+                parts.append(_strip_tail_overlap(m["content"], n))
+            if len(parts) > 1:
+                m = {**m, "content": "\n".join(parts)}
         expanded.append(m)
+
+    if settings.retrieval_merge_chunks is False:
+        expanded = [
+            {**h} for h in hits
+        ][: settings.retrieval_top_k]
 
     # must_include 优先，再按融合分
     expanded.sort(
@@ -239,18 +274,14 @@ async def _merge_chunks(
 
 
 def _flatten_group(group: list[dict]) -> dict:
-    """相邻块合并为一条；must_include 任一组员为真则保留。"""
+    """相邻块合并；overlap 取前块尾部（与 chunker overlap_chars 对齐）。"""
     base = group[0]
-    contents = []
-    seen_prefix = ""
+    contents: list[str] = []
     for g in group:
         c = g["content"]
-        if seen_prefix and c.startswith(seen_prefix[:40]):
-            c = c[len(seen_prefix[:40]):]
-        elif contents and contents[-1].endswith(c[:40]):
-            c = c[40:]
+        if contents:
+            c = _strip_tail_overlap(contents[-1], c)
         contents.append(c)
-        seen_prefix = c
     return {
         **base,
         "content": "\n".join(contents),
@@ -261,17 +292,30 @@ def _flatten_group(group: list[dict]) -> dict:
     }
 
 
-async def _fetch_neighbors(db, doc_id: int, chunk_index: int) -> list[str]:
+def _strip_tail_overlap(prev_content: str, cur: str, overlap: int = 80) -> str:
+    """去掉 cur 中与 prev 尾部重复的 overlap 前缀。"""
+    if prev_content and cur and overlap > 0:
+        tail = prev_content[-overlap:]
+        if cur.startswith(tail):
+            return cur[len(tail):]
+    return cur
+
+
+async def _fetch_neighbors(db, doc_id: int, chunk_index: int) -> tuple[list[str], list[str]]:
+    """返回 (prev_contents, next_contents)，各自按 chunk_index 升序。"""
     rows = (
         await db.execute(
-            select(DocChunk.content)
+            select(DocChunk.chunk_index, DocChunk.content)
             .where(
                 DocChunk.doc_id == doc_id,
                 DocChunk.chunk_index.in_([chunk_index - 1, chunk_index + 1]),
             )
+            .order_by(DocChunk.chunk_index.asc())
         )
-    ).scalars().all()
-    return list(rows)
+    ).all()
+    prev = [c for idx, c in rows if idx < chunk_index]
+    next_ = [c for idx, c in rows if idx > chunk_index]
+    return prev, next_
 
 
 async def retrieve(
@@ -307,54 +351,56 @@ async def retrieve(
 
         vec_ids = [r["chunk_id"] for r in vec_rows]
         kw_ids = [r["chunk_id"] for r in kw_rows]
+        rrf_map = rrf_scores_map(vec_ids, kw_ids)
 
-        # 构建 chunk_id → meta；score 用于展示，rrf_score 用于排序
         meta: dict[int, dict] = {}
-        rrf_scores: dict[int, float] = {}
-        for w, ranked in ((0.65, vec_ids), (0.35, kw_ids)):
-            for rank, cid in enumerate(ranked, 1):
-                rrf_scores[cid] = rrf_scores.get(cid, 0.0) + w / (60 + rank)
-
         for r in vec_rows:
             meta[r["chunk_id"]] = {
                 **r,
                 "vec_score": float(r.get("score") or 0),
                 "kw_rank": None,
                 "score": float(r.get("score") or 0),
-                "rrf_score": rrf_scores.get(r["chunk_id"], 0.0),
+                "rrf_score": rrf_map.get(r["chunk_id"], 0.0),
             }
         for i, r in enumerate(kw_rows):
             cid = r["chunk_id"]
             if cid in meta:
                 meta[cid]["kw_rank"] = i + 1
             else:
-                # 纯关键词命中：score 用 ts_rank（仅排序展示），rrf_score 单独保留
                 meta[cid] = {
                     **r,
                     "vec_score": None,
                     "kw_rank": i + 1,
                     "score": float(r.get("rank") or 0),
-                    "rrf_score": rrf_scores.get(cid, 0.0),
+                    "rrf_score": rrf_map.get(cid, 0.0),
                     "file_name": r.get("file_name"),
                 }
 
-        # 保证两路 Top3 一定进入合并候选，避免专有词命中被 RRF 压掉
-        must_ids = set(vec_ids[:3]) | set(kw_ids[:3])
+        must_ids: set[int] = set()
+        if settings.retrieval_must_include:
+            must_ids = set(vec_ids[:3]) | set(kw_ids[:3])
         for m in meta.values():
             m["must_include"] = m["chunk_id"] in must_ids
+
         ordered = sorted(
             meta.values(),
-            key=lambda m: (
-                0 if m.get("must_include") else 1,
-                -(m.get("rrf_score") or 0),
-            ),
+            key=lambda m: m.get("rrf_score") or 0,
+            reverse=True,
         )
+        if settings.retrieval_must_include:
+            ordered = sorted(
+                meta.values(),
+                key=lambda m: (
+                    0 if m.get("must_include") else 1,
+                    -(m.get("rrf_score") or 0),
+                ),
+            )
 
         chunks = await _merge_chunks(db, ordered[: max(top_k * 4, 20)])
 
     logger.debug(
         f"[retriever] user={user_id} vec={len(vec_rows)} kw={len(kw_rows)} "
-        f"merged={len(chunks)} must={sorted(must_ids)} "
-        f"kw_ids={kw_ids[:5]} out={[c['chunk_id'] for c in chunks]}"
+        f"merged={len(chunks)} must={settings.retrieval_must_include} "
+        f"out={[c['chunk_id'] for c in chunks[:5]]}"
     )
     return chunks[:top_k]

@@ -1,0 +1,31 @@
+{
+  "docs": [
+    {"file": "报销管理制度.md", "visibility": "global", "dept": null, "whitelist": []},
+    {"file": "考勤与休假制度.md", "visibility": "global", "dept": null, "whitelist": []},
+    {"file": "新员工入职指南.md", "visibility": "global", "dept": null, "whitelist": []},
+    {"file": "信息安全与合规制度.md", "visibility": "global", "dept": null, "whitelist": []},
+    {"file": "IT设备与运维服务规范.md", "visibility": "non_customer", "dept": null, "whitelist": []},
+    {"file": "薪酬调整实施方案-受限.md", "visibility": "specific_users", "dept": "RD", "whitelist": ["zhangsan", "rdadmin"]},
+
+    {"file": "差旅报销管理办法-2024旧版.md", "visibility": "global", "dept": null, "whitelist": [], "category": "干扰-旧版"},
+    {"file": "销售部差旅补充规定.md", "visibility": "dept_only", "dept": "RD", "whitelist": [], "category": "干扰-部门"},
+    {"file": "海外出差报销细则.md", "visibility": "global", "dept": null, "whitelist": [], "category": "干扰-同主题"},
+
+    {"file": "加班管理规定-研发部.md", "visibility": "dept_only", "dept": "RD", "whitelist": [], "category": "同名-研发"},
+    {"file": "加班管理规定-销售部.md", "visibility": "dept_only", "dept": "HR", "whitelist": [], "category": "同名-销售"},
+    {"file": "加班管理规定-历史归档.md", "visibility": "global", "dept": null, "whitelist": [], "category": "同名-归档"},
+
+    {"file": "员工手册2023版节选.md", "visibility": "global", "dept": null, "whitelist": [], "category": "无关"},
+    {"file": "产品A用户操作手册.md", "visibility": "global", "dept": null, "whitelist": [], "category": "无关"},
+    {"file": "2026Q1产品评审会议纪要.md", "visibility": "global", "dept": null, "whitelist": [], "category": "无关"},
+    {"file": "信息安全应急响应手册.md", "visibility": "global", "dept": null, "whitelist": [], "category": "干扰-同主题"},
+    {"file": "数据安全与个人信息保护规范.md", "visibility": "global", "dept": null, "whitelist": [], "category": "干扰-同主题"},
+    {"file": "办公设备资产管理办法.md", "visibility": "global", "dept": null, "whitelist": [], "category": "干扰-同主题"},
+    {"file": "招聘与入职管理办法.md", "visibility": "global", "dept": null, "whitelist": [], "category": "干扰-同主题"},
+    {"file": "病假与医疗期管理细则-征求意见稿.md", "visibility": "global", "dept": null, "whitelist": [], "category": "干扰-草案"},
+    {"file": "会议室与访客管理规定.md", "visibility": "global", "dept": null, "whitelist": [], "category": "无关"},
+    {"file": "客服部服务规范.md", "visibility": "dept_only", "dept": "CS", "whitelist": [], "category": "权限"},
+    {"file": "研发部提测与发布规范.md", "visibility": "dept_only", "dept": "RD", "whitelist": [], "category": "权限"},
+    {"file": "编号与单据速查表.md", "visibility": "global", "dept": null, "whitelist": [], "category": "编号密集"}
+  ]
+}

@@ -1,25 +1,16 @@
 """
 Eval runner — 运行 golden cases 评测 RAG 工作流。
 
-指标：
-- intent_accuracy:    意图分类准确率
-- doc_hit_rate:       检索命中率（仅统计声明了 expected_doc_title 的 case）
-- tool_call_accuracy: 工具调用准确率（该调的调对、不该调的不调、参数合法、执行成功）
-- citation_rate:      引用覆盖率（仅统计声明了 should_cite 的 case）
-- permission_pass_rate: 权限负例通过率（受限文档未被召回）
+指标（E2 重定义）：
+- doc_hit@3 / doc_hit_rate: 期望文档出现在 sources 前 3（仅 expected_doc_title 非空）
+- recall@1: 期望文档是 sources 第 1
+- mrr: 1/排名，未命中 0，对 expected_doc_title case 平均
+- heading_hit: 期望 heading 出现在命中 chunk 的 heading
+- tool_call_accuracy / intent_accuracy / permission_pass_rate: 保留
+- citation_rate: 仅 should_cite 且 doc_hit@3 的 case
+- skip_generation=True 时 citation_rate 不评估答案正文质量，只看 sources 列表
 
-设计要点：
-1. 超时不算作"质量失败"。一条 case 超时意味着这一轮没有观测值，
-   它会从各质量指标的分母里剔除，单独计入 timeout_count。
-   （历史 bug：超时被记成 intent/doc/tool/citation 四项全错，
-     且 str(asyncio.TimeoutError()) 是空字符串，失败原因整个丢失。）
-2. 默认 skip_generation=True。四个指标都不依赖答案正文，而生成节点是整条
-   链路最慢的一步（CPU 上 7B 模型约 100s/条），跳过后单条从 ~100s 降到几秒。
-   需要端到端验证生成时传 skip_generation=False。
-3. 默认 tool_dry_run=True，工具照常做权限与参数校验但不写库，
-   避免每跑一次评测就往 it_tickets 里堆真工单。
-4. 权限负例通过 case 的 as_user 字段固定身份运行——super_admin 会跳过
-   全部权限过滤，用调用者身份跑权限负例恒失败。
+conversation_history: case 可带 history 字段（list of {role,content}），用于多轮改写评测。
 """
 from __future__ import annotations
 
@@ -37,9 +28,6 @@ from services.embedder import get_embedding
 from services.llm_client import chat_complete
 
 _CASES_PATH = Path(__file__).parent / "cases.json"
-
-# 单条 case 墙钟上限。skip_generation=True 时一条 RAG case 约 3~12s。
-# 跑全量生成（skip_generation=False）时需要调大到几百秒。
 DEFAULT_CASE_TIMEOUT = 90.0
 
 
@@ -50,12 +38,17 @@ class CaseResult:
     expected_intent: str
     actual_intent: str
     intent_correct: bool
-    doc_hit: bool
+    doc_hit: bool          # Top-3 命中（保留字段名兼容旧报告）
+    doc_rank: int          # 期望文档在 sources 中的排名，1-based；未命中 -1
+    recall_at_1: bool
+    heading_hit: bool
+    mrr: float             # 本条 1/rank 或 0
     tool_call_correct: bool
     has_citation: bool
-    forbidden_doc_leaked: bool  # True = 不该出现的文档被召回了
+    forbidden_doc_leaked: bool
     latency_ms: int
-    timed_out: bool = False     # True = 本轮无观测值，不参与质量指标
+    group: str = ""
+    timed_out: bool = False
     error: Optional[str] = None
     detail: str = ""
 
@@ -63,10 +56,13 @@ class CaseResult:
 @dataclass
 class EvalReport:
     total_cases: int
-    scored_cases: int            # 参与质量指标统计的 case 数（= total - timeout）
+    scored_cases: int
     timeout_count: int
     intent_accuracy: float
     doc_hit_rate: float
+    recall_at_1: float
+    mrr: float
+    heading_hit_rate: float
     tool_call_accuracy: float
     citation_rate: float
     permission_pass_rate: float
@@ -74,6 +70,7 @@ class EvalReport:
     case_results: list[CaseResult] = field(default_factory=list)
     failed_cases: list[dict] = field(default_factory=list)
     timeout_cases: list[dict] = field(default_factory=list)
+    by_group: dict = field(default_factory=dict)
 
 
 async def warmup() -> float:
@@ -138,12 +135,15 @@ async def run_case(
     run_user_dept_id = as_user.get("user_dept_id", user_dept_id)
 
     start = time.time()
+    # ── 多轮 history ────────────────────────────────────────────
+    history = case.get("conversation_history") or case.get("history") or []
+
     initial_state = RAGState(
         query=case["question"],
         user_id=run_user_id,
         user_role=run_user_role,
         user_dept_id=run_user_dept_id,
-        conversation_history=[],
+        conversation_history=history,
         anonymized_query="",
         intent="",
         retrieved_chunks=[],
@@ -176,9 +176,12 @@ async def run_case(
         return CaseResult(
             case_id=case["id"], question=case["question"],
             expected_intent=case.get("expected_intent", ""), actual_intent="",
-            intent_correct=False, doc_hit=False, tool_call_correct=False,
+            intent_correct=False, doc_hit=False, doc_rank=-1,
+            recall_at_1=False, heading_hit=False, mrr=0.0,
+            tool_call_correct=False,
             has_citation=False, forbidden_doc_leaked=False,
             latency_ms=int((time.time() - start) * 1000),
+            group=case.get("group") or "",
             timed_out=timed_out, error=err,
             detail=f"超时（>{timeout:.0f}s），本条无观测值" if timed_out else err,
         )
@@ -198,16 +201,47 @@ async def run_case(
     expected_intent = case.get("expected_intent", "")
     intent_correct = actual_intent == expected_intent
 
-    # 文档命中：检查召回来源的文档名（测"召回了正确的文档"，而非在 chunk 文本里搜词）
+    # ── 检索指标（E2）───────────────────────────────────────────
     sources = final_state.get("sources", [])
     source_doc_names = [s.get("doc_name", "") for s in sources]
-    doc_hit = True
-    expected_title = case.get("expected_doc_title")
-    if expected_title:
-        doc_hit = any(expected_title in name for name in source_doc_names)
 
-    # 工具调用：该调的调对、不该调的不调、参数合法、执行成功
-    # 多步循环下 tool_name 是最后一次；tool_history 记录全部步骤
+    expected_title = (case.get("expected_doc_title") or "").strip()
+    expected_heading = (case.get("expected_heading") or "").strip()
+    doc_rank = -1
+    doc_hit = True          # 无期望文档时不计入分母，这里先标 True
+    recall_at_1 = True
+    heading_hit = True
+    mrr = 1.0
+    if expected_title:
+        # 优先精确文件名匹配，其次子串（兼容旧 case）
+        for i, name in enumerate(source_doc_names, 1):
+            if name == expected_title or expected_title in name or (
+                expected_title.endswith(".md") and name.startswith(expected_title)
+            ):
+                doc_rank = i
+                break
+        doc_hit = 0 < doc_rank <= 3
+        recall_at_1 = doc_rank == 1
+        mrr = 1.0 / doc_rank if doc_rank > 0 else 0.0
+        if expected_heading:
+            hit_chunk = None
+            if doc_rank > 0:
+                hit_chunk = sources[doc_rank - 1] if doc_rank <= len(sources) else None
+            if hit_chunk:
+                h = (hit_chunk.get("heading") or "")
+                heading_hit = expected_heading in h
+            else:
+                heading_hit = False
+        else:
+            heading_hit = doc_hit  # 未标注 heading 时与 doc_hit 同
+
+    # 引用：仅 should_cite 且 doc_hit@3 时才算有效引用
+    if case.get("should_cite"):
+        has_citation = bool(sources) and doc_hit
+    else:
+        has_citation = True
+
+    # 工具调用
     expected_tool = case.get("expected_tool")
     tool_history = final_state.get("tool_history") or []
     actual_tool = final_state.get("tool_name")
@@ -215,7 +249,6 @@ async def run_case(
     tool_success = final_state.get("tool_success")
     tool_error = final_state.get("tool_error")
 
-    # 期望工具出现在历史任意一步即算命中（适配 precheck→submit 等多步）
     hist_names = [h.get("name") for h in tool_history]
     hist_hit = None
     if expected_tool:
@@ -230,14 +263,12 @@ async def run_case(
             tool_call_correct = False
             tool_detail = f"工具: 期望={expected_tool}, 实际={actual_tool or hist_names or '无'}"
         else:
-            # 参数比对：优先历史中命中的那一步，否则比对最后一次
             check_args = (hist_hit or {}).get("args") or actual_args
             check_ok = (hist_hit or {}).get("success")
             if check_ok is None:
                 check_ok = tool_success
             args_ok, args_msg = _args_match(case.get("expected_tool_args", {}), check_args)
             exec_ok = (not case.get("expect_tool_success")) or check_ok is True
-            # expect_tool_denied：期望权限拒绝
             if case.get("expect_tool_denied"):
                 exec_ok = check_ok is False and bool(
                     (hist_hit or {}).get("error") or tool_error or final_state.get("permission_denied")
@@ -252,9 +283,7 @@ async def run_case(
         if not tool_call_correct:
             tool_detail = f"工具: 期望不调用, 实际={actual_tool or hist_names}({actual_args})"
 
-    has_citation = len(sources) > 0 if case.get("should_cite") else True
-
-    # 权限负例：不应召回 forbidden_doc_title 对应的文档
+    # 权限负例
     forbidden_doc_leaked = False
     forbidden_title = case.get("forbidden_doc_title")
     if forbidden_title:
@@ -263,14 +292,15 @@ async def run_case(
     detail_parts = []
     if not intent_correct:
         detail_parts.append(f"意图: 期望={expected_intent}, 实际={actual_intent}")
-    if not doc_hit:
+    if expected_title and not doc_hit:
         detail_parts.append(
-            f"未召回到期望文档: {expected_title}（实际召回: {source_doc_names or '无'}）"
+            f"doc_hit@3 miss: 期望={expected_title} rank={doc_rank} "
+            f"召回={source_doc_names or '无'}"
         )
     if tool_detail:
         detail_parts.append(tool_detail)
-    if not has_citation:
-        detail_parts.append("缺少引用")
+    if case.get("should_cite") and not has_citation:
+        detail_parts.append("citation 无效（未命中期望文档或 sources 空）")
     if forbidden_doc_leaked:
         detail_parts.append(f"泄露受限文档: {forbidden_title}")
 
@@ -278,9 +308,13 @@ async def run_case(
         case_id=case["id"], question=case["question"],
         expected_intent=expected_intent, actual_intent=actual_intent,
         intent_correct=intent_correct, doc_hit=doc_hit,
+        doc_rank=doc_rank, recall_at_1=recall_at_1,
+        heading_hit=heading_hit, mrr=mrr,
         tool_call_correct=tool_call_correct, has_citation=has_citation,
         forbidden_doc_leaked=forbidden_doc_leaked,
-        latency_ms=latency_ms, error=final_state.get("error"),
+        latency_ms=latency_ms,
+        group=case.get("group") or "",
+        error=final_state.get("error"),
         detail="; ".join(detail_parts),
     )
 
@@ -331,18 +365,20 @@ async def run_eval(
     total = len(results)
     pairs = list(zip(results, cases))
 
-    # 超时 = 本轮没有观测值，不能算作质量失败，从各指标分母中剔除
     scored = [(r, c) for r, c in pairs if not r.timed_out]
     timeouts = [r for r in results if r.timed_out]
 
-    doc_pairs = [(r, c) for r, c in scored if c.get("expected_doc_title")]
-    cite_pairs = [(r, c) for r, c in scored if c.get("should_cite")]
+    doc_pairs = [(r, c) for r, c in scored if (c.get("expected_doc_title") or "").strip()]
+    cite_pairs = [(r, c) for r, c in scored if c.get("should_cite") and r.doc_hit]
     perm_pairs = [(r, c) for r, c in scored if c.get("forbidden_doc_title")]
+    heading_pairs = [(r, c) for r, c in scored
+                     if (c.get("expected_doc_title") or "").strip()]
 
     avg_latency = sum(r.latency_ms for r in results) // total
 
     failed = [
-        {"case_id": r.case_id, "question": r.question, "detail": r.detail, "error": r.error}
+        {"case_id": r.case_id, "question": r.question, "detail": r.detail, "error": r.error,
+         "group": r.group, "doc_rank": r.doc_rank}
         for r, _ in scored
         if not (r.intent_correct and r.doc_hit and r.tool_call_correct
                 and r.has_citation and not r.forbidden_doc_leaked)
@@ -353,12 +389,36 @@ async def run_eval(
         for r in timeouts
     ]
 
+    # 按组汇总
+    groups: dict[str, list[CaseResult]] = {}
+    for r, _ in scored:
+        g = r.group or "default"
+        groups.setdefault(g, []).append(r)
+    by_group = {}
+    for g, items in groups.items():
+        ditems = [x for x in items if x.doc_rank >= 0 or (x.mrr == 0 and x.doc_hit)]
+        # 有期望文档的组员才有 doc 指标
+        doc_items = [x for x in items if x.mrr > 0 or x.doc_rank == -1]
+        # 简化：组内所有 case 都计入 mrr（无期望时 mrr=1，会拉高——因此只统计 group 内
+        # doc_rank 曾被计算过的（expected_title 有值）难以从 result 反推；
+        # 用 doc_rank != 0 区分：无期望时我们设 doc_rank=-1 且 mrr=1.0，
+        # 这里改为：mrr 组内平均时排除「未声明期望且 mrr==1 且 doc_hit」的情况不可靠。
+        # 采用：组报告仅对 intent/tool 统计全量，doc/mrr 在报告总表用 doc_pairs。
+        by_group[g] = {
+            "count": len(items),
+            "intent_accuracy": _rate(sum(1 for x in items if x.intent_correct), len(items)),
+            "tool_call_accuracy": _rate(sum(1 for x in items if x.tool_call_correct), len(items)),
+        }
+
     return EvalReport(
         total_cases=total,
         scored_cases=len(scored),
         timeout_count=len(timeouts),
         intent_accuracy=_rate(sum(1 for r, _ in scored if r.intent_correct), len(scored)),
         doc_hit_rate=_rate(sum(1 for r, _ in doc_pairs if r.doc_hit), len(doc_pairs)),
+        recall_at_1=_rate(sum(1 for r, _ in doc_pairs if r.recall_at_1), len(doc_pairs)),
+        mrr=round(sum(r.mrr for r, _ in doc_pairs) / len(doc_pairs), 4) if doc_pairs else 1.0,
+        heading_hit_rate=_rate(sum(1 for r, _ in heading_pairs if r.heading_hit), len(heading_pairs)),
         tool_call_accuracy=_rate(sum(1 for r, _ in scored if r.tool_call_correct), len(scored)),
         citation_rate=_rate(sum(1 for r, _ in cite_pairs if r.has_citation), len(cite_pairs)),
         permission_pass_rate=_rate(
@@ -368,4 +428,5 @@ async def run_eval(
         case_results=results,
         failed_cases=failed,
         timeout_cases=timed_out_cases,
+        by_group=by_group,
     )

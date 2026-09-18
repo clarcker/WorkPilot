@@ -155,6 +155,16 @@ async def list_gaps(
     return BaseResp.ok(PagedData(items=items, total=total, page=page, page_size=page_size))
 
 
+async def _load_gap_for_admin(db: AsyncSession, qa_id: int, current_user: User) -> QARecord:
+    rec = await db.scalar(select(QARecord).where(QARecord.id == qa_id))
+    if not rec:
+        raise HTTPException(404, detail={"code": 40400, "message": "记录不存在"})
+    if current_user.role == UserRole.dept_admin:
+        if rec.dept_id != current_user.dept_id:
+            raise HTTPException(403, detail={"code": 40301, "message": "无权操作其他部门的记录"})
+    return rec
+
+
 @router.post("/gaps/{qa_id}/resolve", response_model=BaseResp[None])
 async def resolve_gap(
     qa_id: int,
@@ -162,9 +172,7 @@ async def resolve_gap(
     current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    rec = await db.scalar(select(QARecord).where(QARecord.id == qa_id))
-    if not rec:
-        raise HTTPException(404, detail={"code": 40400, "message": "记录不存在"})
+    rec = await _load_gap_for_admin(db, qa_id, current_user)
     rec.gap_resolved = body.resolved
     await db.commit()
     return BaseResp.ok(message="已更新")
@@ -178,14 +186,12 @@ async def gap_to_eval(
 ):
     """
     场景 C：把知识缺口问题写入 golden cases（eval/cases.json）。
-    默认 intent=rag、should_cite=true；补文档后重跑 eval 验证。
+    注意：生产多 worker 应写 eval_cases 表；当前为单机演示路径。
     """
     import json
     from pathlib import Path
 
-    rec = await db.scalar(select(QARecord).where(QARecord.id == qa_id))
-    if not rec:
-        raise HTTPException(404, detail={"code": 40400, "message": "记录不存在"})
+    rec = await _load_gap_for_admin(db, qa_id, current_user)
     question = (rec.query or "").strip()
     if not question:
         raise HTTPException(400, detail={"code": 40010, "message": "问题为空，无法入库"})
@@ -196,7 +202,6 @@ async def gap_to_eval(
     except Exception as exc:
         raise HTTPException(500, detail={"code": 50001, "message": f"读取 cases.json 失败: {exc}"})
 
-    # 去重：问题文本已存在则不再追加
     for c in cases:
         if (c.get("question") or "").strip() == question:
             return BaseResp.ok({
@@ -221,6 +226,7 @@ async def gap_to_eval(
         "question": question,
         "expected_intent": rec.intent or "rag",
         "should_cite": True,
+        "group": "gap",
         "description": f"知识缺口导入 qa_id={qa_id}（补文档后可填 expected_doc_title）",
     }
     cases.append(new_case)
