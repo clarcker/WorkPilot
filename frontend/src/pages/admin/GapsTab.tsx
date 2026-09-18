@@ -6,7 +6,7 @@ import {
   Button, Table, Tag, Typography, message as antMsg,
   Space, Alert, Switch,
 } from 'antd'
-import { ReloadOutlined, CheckCircleOutlined } from '@ant-design/icons'
+import { ReloadOutlined, CheckCircleOutlined, ExperimentOutlined } from '@ant-design/icons'
 import client from '../../api/client'
 
 const { Title, Text, Paragraph } = Typography
@@ -58,6 +58,18 @@ export default function GapsTab() {
     }
   }
 
+  async function addToEval(id: number) {
+    try {
+      const { data } = await client.post(`/quality/gaps/${id}/to_eval`)
+      const msg = data?.message || '已加入评测集'
+      antMsg.success(`${msg}${data?.case_id ? `（${data.case_id}）` : ''}`)
+    } catch (e: unknown) {
+      const m = (e as { response?: { data?: { detail?: { message?: string } } } })
+        ?.response?.data?.detail?.message
+      antMsg.error(m || '加入评测集失败')
+    }
+  }
+
   const cols = [
     { title: '问题', dataIndex: 'query', key: 'q', ellipsis: true },
     {
@@ -78,12 +90,17 @@ export default function GapsTab() {
       render: (v: string) => new Date(v).toLocaleString('zh-CN'),
     },
     {
-      title: '', key: 'op', width: 90,
+      title: '', key: 'op', width: 170,
       render: (_: unknown, r: GapItem) =>
         !showResolved ? (
-          <Button size="small" icon={<CheckCircleOutlined />} onClick={() => resolve(r.id)}>
-            已解决
-          </Button>
+          <Space size={4}>
+            <Button size="small" icon={<ExperimentOutlined />} onClick={() => addToEval(r.id)}>
+              入评测集
+            </Button>
+            <Button size="small" icon={<CheckCircleOutlined />} onClick={() => resolve(r.id)}>
+              已解决
+            </Button>
+          </Space>
         ) : null,
     },
   ]

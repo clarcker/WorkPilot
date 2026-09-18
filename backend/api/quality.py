@@ -168,3 +168,69 @@ async def resolve_gap(
     rec.gap_resolved = body.resolved
     await db.commit()
     return BaseResp.ok(message="已更新")
+
+
+@router.post("/gaps/{qa_id}/to_eval", response_model=BaseResp[dict])
+async def gap_to_eval(
+    qa_id: int,
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    场景 C：把知识缺口问题写入 golden cases（eval/cases.json）。
+    默认 intent=rag、should_cite=true；补文档后重跑 eval 验证。
+    """
+    import json
+    from pathlib import Path
+
+    rec = await db.scalar(select(QARecord).where(QARecord.id == qa_id))
+    if not rec:
+        raise HTTPException(404, detail={"code": 40400, "message": "记录不存在"})
+    question = (rec.query or "").strip()
+    if not question:
+        raise HTTPException(400, detail={"code": 40010, "message": "问题为空，无法入库"})
+
+    cases_path = Path(__file__).resolve().parents[1] / "eval" / "cases.json"
+    try:
+        cases = json.loads(cases_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(500, detail={"code": 50001, "message": f"读取 cases.json 失败: {exc}"})
+
+    # 去重：问题文本已存在则不再追加
+    for c in cases:
+        if (c.get("question") or "").strip() == question:
+            return BaseResp.ok({
+                "case_id": c.get("id"),
+                "message": "该问题已在评测集中",
+                "duplicated": True,
+            })
+
+    nums = []
+    for c in cases:
+        cid = str(c.get("id") or "")
+        if cid.startswith("case_"):
+            try:
+                nums.append(int(cid.split("_", 1)[1]))
+            except ValueError:
+                pass
+    next_n = (max(nums) + 1) if nums else 1
+    case_id = f"case_{next_n:03d}"
+
+    new_case = {
+        "id": case_id,
+        "question": question,
+        "expected_intent": rec.intent or "rag",
+        "should_cite": True,
+        "description": f"知识缺口导入 qa_id={qa_id}（补文档后可填 expected_doc_title）",
+    }
+    cases.append(new_case)
+    cases_path.write_text(
+        json.dumps(cases, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return BaseResp.ok({
+        "case_id": case_id,
+        "question": question,
+        "message": "已加入评测集，补文档后可重跑 eval",
+        "duplicated": False,
+    })
