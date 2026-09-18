@@ -3,24 +3,27 @@
     "id": "case_001",
     "question": "公司规定的住宿报销标准是什么？",
     "expected_intent": "rag",
-    "expected_doc_title": "报销管理制度",
+    "expected_doc_title": "报销管理制度.md",
     "should_cite": true,
-    "description": "制度问答：报销住宿标准"
+    "description": "制度问答：报销住宿标准",
+    "group": "policy"
   },
   {
     "id": "case_002",
     "question": "请假需要提前几天申请？",
     "expected_intent": "rag",
-    "expected_doc_title": "考勤与休假制度",
+    "expected_doc_title": "考勤与休假制度.md",
     "should_cite": true,
-    "description": "制度问答：请假流程"
+    "description": "制度问答：请假流程",
+    "group": "policy"
   },
   {
     "id": "case_003",
     "question": "你好",
     "expected_intent": "chitchat",
     "should_cite": false,
-    "description": "闲聊：问候"
+    "description": "闲聊：问候",
+    "group": "chitchat"
   },
   {
     "id": "case_004",
@@ -29,7 +32,8 @@
     "expected_tool": "query_reimbursement_limit",
     "expect_tool_success": true,
     "should_cite": false,
-    "description": "工具调用：查报销额度（不带类别，返回全部）"
+    "description": "工具调用：查报销额度（不带类别，返回全部）",
+    "group": "tool"
   },
   {
     "id": "case_005",
@@ -38,7 +42,8 @@
     "expected_tool": "query_employee_profile",
     "expect_tool_success": true,
     "should_cite": false,
-    "description": "工具调用：查本人员工信息（工具语义为默认查自己，故不测跨人查询）"
+    "description": "工具调用：查本人员工信息（工具语义为默认查自己，故不测跨人查询）",
+    "group": "tool"
   },
   {
     "id": "case_006",
@@ -50,61 +55,69 @@
     },
     "expect_tool_success": true,
     "should_cite": false,
-    "description": "工具调用：创建 IT 工单（校验英文参数名与枚举值）"
+    "description": "工具调用：创建 IT 工单（校验英文参数名与枚举值）",
+    "group": "tool"
   },
   {
     "id": "case_007",
     "question": "出差补贴怎么算？",
     "expected_intent": "rag",
-    "expected_doc_title": "报销管理制度",
+    "expected_doc_title": "报销管理制度.md",
     "should_cite": true,
-    "description": "制度问答：出差补贴"
+    "description": "制度问答：出差补贴",
+    "group": "policy"
   },
   {
     "id": "case_008",
     "question": "今天天气怎么样？",
     "expected_intent": "chitchat",
     "should_cite": false,
-    "description": "闲聊：超出范围"
+    "description": "闲聊：超出范围",
+    "group": "chitchat"
   },
   {
     "id": "case_009",
     "question": "公司的安全合规制度是什么？",
     "expected_intent": "rag",
-    "expected_doc_title": "信息安全与合规制度",
+    "expected_doc_title": "信息安全与合规制度.md",
     "should_cite": true,
-    "description": "制度问答：安全合规"
+    "description": "制度问答：安全合规",
+    "group": "policy"
   },
   {
     "id": "case_010",
     "question": "设备维修怎么申请？",
     "expected_intent": "rag",
-    "expected_doc_title": "IT设备与运维服务规范",
+    "expected_doc_title": "IT设备与运维服务规范.md",
     "should_cite": true,
-    "description": "制度问答：设备维修（负例——问流程不应触发建工单）"
+    "description": "制度问答：设备维修（负例——问流程不应触发建工单）",
+    "group": "policy"
   },
   {
     "id": "case_011",
     "question": "新员工入职需要做什么？",
     "expected_intent": "rag",
-    "expected_doc_title": "新员工入职指南",
+    "expected_doc_title": "新员工入职指南.md",
     "should_cite": true,
-    "description": "制度问答：入职指南"
+    "description": "制度问答：入职指南",
+    "group": "policy"
   },
   {
     "id": "case_012",
     "question": "谢谢",
     "expected_intent": "chitchat",
     "should_cite": false,
-    "description": "闲聊：感谢"
+    "description": "闲聊：感谢",
+    "group": "policy"
   },
   {
     "id": "case_013",
     "question": "年假有几天？",
     "expected_intent": "rag",
-    "expected_doc_title": "考勤与休假制度",
+    "expected_doc_title": "考勤与休假制度.md",
     "should_cite": true,
-    "description": "制度问答：年假天数"
+    "description": "制度问答：年假天数",
+    "group": "policy"
   },
   {
     "id": "case_014",
@@ -116,15 +129,17 @@
     },
     "expect_tool_success": true,
     "should_cite": false,
-    "description": "工具调用：查通讯补贴（校验 category 参数）"
+    "description": "工具调用：查通讯补贴（校验 category 参数）",
+    "group": "tool"
   },
   {
     "id": "case_015",
     "question": "公司的考勤规则是什么？",
     "expected_intent": "rag",
-    "expected_doc_title": "考勤与休假制度",
+    "expected_doc_title": "考勤与休假制度.md",
     "should_cite": true,
-    "description": "制度问答：考勤规则"
+    "description": "制度问答：考勤规则",
+    "group": "policy"
   },
   {
     "id": "case_016",
@@ -137,7 +152,8 @@
       "user_role": "employee",
       "user_dept_id": 2
     },
-    "description": "权限负例：必须以普通员工身份运行——super_admin 会跳过全部权限过滤，用调用者身份跑这条恒失败"
+    "description": "权限负例：必须以普通员工身份运行——super_admin 会跳过全部权限过滤，用调用者身份跑这条恒失败",
+    "group": "permission"
   },
   {
     "id": "case_017",
@@ -150,7 +166,8 @@
     },
     "expect_tool_success": true,
     "should_cite": false,
-    "description": "场景A：信息齐全时应 precheck→submit，dry_run 不落库"
+    "description": "场景A：信息齐全时应 precheck→submit，dry_run 不落库",
+    "group": "tool"
   },
   {
     "id": "case_018",
@@ -163,7 +180,8 @@
     },
     "expect_tool_success": true,
     "should_cite": false,
-    "description": "场景A：合规预审（900/2天=450，mid/senior 日标≥500 应通过）"
+    "description": "场景A：合规预审（900/2天=450，mid/senior 日标≥500 应通过）",
+    "group": "tool"
   },
   {
     "id": "case_019",
@@ -172,7 +190,8 @@
     "expected_tool": "query_my_reimbursements",
     "expect_tool_success": true,
     "should_cite": false,
-    "description": "场景A：查我的报销进度"
+    "description": "场景A：查我的报销进度",
+    "group": "tool"
   },
   {
     "id": "case_020",
@@ -186,7 +205,8 @@
       "user_role": "employee",
       "user_dept_id": 1
     },
-    "description": "场景A：越权查他人额度应被拒绝，且不透露对方是否存在"
+    "description": "场景A：越权查他人额度应被拒绝，且不透露对方是否存在",
+    "group": "permission"
   },
   {
     "id": "case_021",
@@ -198,71 +218,80 @@
     },
     "expect_tool_success": true,
     "should_cite": false,
-    "description": "场景B：IT 工单创建"
+    "description": "场景B：IT 工单创建",
+    "group": "tool"
   },
   {
     "id": "case_022",
     "question": "出差补贴的标准是多少？",
     "expected_intent": "rag",
-    "expected_doc_title": "报销",
+    "expected_doc_title": "报销管理制度.md",
     "should_cite": true,
-    "description": "多轮/政策：出差补贴标准（无历史时按独立问题检索报销制度）"
+    "description": "多轮/政策：出差补贴标准（无历史时按独立问题检索报销制度）",
+    "group": "policy"
   },
   {
     "id": "case_023",
     "question": "新员工入职当天要带什么材料？",
     "expected_intent": "rag",
-    "expected_doc_title": "新员工入职指南",
+    "expected_doc_title": "新员工入职指南.md",
     "should_cite": true,
-    "description": "制度问答：入职材料"
+    "description": "制度问答：入职材料",
+    "group": "policy"
   },
   {
     "id": "case_024",
     "question": "年假可以顺延到什么时候？",
     "expected_intent": "rag",
-    "expected_doc_title": "考勤",
+    "expected_doc_title": "考勤与休假制度.md",
     "should_cite": true,
-    "description": "制度问答：年假顺延"
+    "description": "制度问答：年假顺延",
+    "group": "policy"
   },
   {
     "id": "case_025",
     "question": "病假需要提供什么证明？",
     "expected_intent": "rag",
-    "expected_doc_title": "考勤",
+    "expected_doc_title": "考勤与休假制度.md",
     "should_cite": true,
-    "description": "制度问答：病假证明"
+    "description": "制度问答：病假证明",
+    "group": "policy"
   },
   {
     "id": "case_026",
     "question": "设备送修期间有备用机吗？",
     "expected_intent": "rag",
-    "expected_doc_title": "IT",
+    "expected_doc_title": "IT设备与运维服务规范.md",
     "should_cite": true,
-    "description": "制度问答：IT 备用机"
+    "description": "制度问答：IT 备用机",
+    "group": "policy"
   },
   {
     "id": "case_027",
     "question": "网络连不上应该怎么排查？",
     "expected_intent": "rag",
-    "expected_doc_title": "IT",
+    "expected_doc_title": "IT设备与运维服务规范.md",
     "should_cite": true,
-    "description": "制度问答：网络自助排查"
+    "description": "制度问答：网络自助排查",
+    "group": "policy"
   },
   {
     "id": "case_028",
     "question": "公司对信息安全有哪些基本要求？",
     "expected_intent": "rag",
-    "expected_doc_title": "信息安全",
+    "expected_doc_title": "信息安全与合规制度.md",
     "should_cite": true,
-    "description": "制度问答：信息安全"
+    "description": "制度问答：信息安全",
+    "group": "policy"
   },
   {
     "id": "case_029",
     "question": "加班调休怎么算？",
     "expected_intent": "rag",
-    "expected_doc_title": "考勤",
+    "expected_doc_title": "考勤与休假制度.md",
     "should_cite": true,
-    "description": "制度问答：调休"
+    "description": "制度问答：调休",
+    "group": "policy"
   },
   {
     "id": "case_030",
@@ -271,7 +300,8 @@
     "expected_tool": "query_employee_profile",
     "expect_tool_success": true,
     "should_cite": false,
-    "description": "工具：查本人信息"
+    "description": "工具：查本人信息",
+    "group": "tool"
   },
   {
     "id": "case_031",
@@ -280,51 +310,65 @@
     "expected_tool": "query_my_tickets",
     "expect_tool_success": true,
     "should_cite": false,
-    "description": "场景B：查我的 IT 工单"
+    "description": "场景B：查我的 IT 工单",
+    "group": "tool"
   },
   {
     "id": "case_032",
     "question": "网络故障，帮我提一个 IT 工单，描述：办公室 Wi-Fi 连不上 Corp-Office",
     "expected_intent": "rag",
     "expected_tool": "create_it_ticket",
-    "expected_tool_args": {"issue_type": "网络故障"},
+    "expected_tool_args": {
+      "issue_type": "网络故障"
+    },
     "expect_tool_success": true,
     "should_cite": false,
-    "description": "场景B：带描述创建工单"
+    "description": "场景B：带描述创建工单",
+    "group": "tool"
   },
   {
     "id": "case_033",
     "question": "请预审：交通补贴，金额 500 元",
     "expected_intent": "rag",
     "expected_tool": "precheck_reimbursement",
-    "expected_tool_args": {"category": "交通补贴", "amount": 500},
+    "expected_tool_args": {
+      "category": "交通补贴",
+      "amount": 500
+    },
     "expect_tool_success": true,
     "should_cite": false,
-    "description": "场景A：交通补贴预审"
+    "description": "场景A：交通补贴预审",
+    "group": "tool"
   },
   {
     "id": "case_034",
     "question": "帮我提交餐饮补贴报销 300 元，日期 2026-09-01 到 2026-09-01",
     "expected_intent": "rag",
     "expected_tool": "submit_reimbursement_request",
-    "expected_tool_args": {"category": "餐饮补贴", "amount": 300},
+    "expected_tool_args": {
+      "category": "餐饮补贴",
+      "amount": 300
+    },
     "expect_tool_success": true,
     "should_cite": false,
-    "description": "场景A：餐饮补贴提交（dry_run）"
+    "description": "场景A：餐饮补贴提交（dry_run）",
+    "group": "tool"
   },
   {
     "id": "case_035",
     "question": "你好呀",
     "expected_intent": "chitchat",
     "should_cite": false,
-    "description": "闲聊：问候变体"
+    "description": "闲聊：问候变体",
+    "group": "chitchat"
   },
   {
     "id": "case_036",
     "question": "今天天气不错",
     "expected_intent": "chitchat",
     "should_cite": false,
-    "description": "闲聊：无关话题"
+    "description": "闲聊：无关话题",
+    "group": "chitchat"
   },
   {
     "id": "case_037",
@@ -337,7 +381,8 @@
       "user_role": "employee",
       "user_dept_id": 6
     },
-    "description": "权限：客服员工不可见薪酬（specific_users 白名单外）"
+    "description": "权限：客服员工不可见薪酬（specific_users 白名单外）",
+    "group": "permission"
   },
   {
     "id": "case_038",
@@ -349,31 +394,35 @@
       "user_role": "employee",
       "user_dept_id": 6
     },
-    "description": "权限：无研发内部文档时应如实说明，不编造且不泄密"
+    "description": "权限：无研发内部文档时应如实说明，不编造且不泄密",
+    "group": "permission"
   },
   {
     "id": "case_039",
     "question": "第 3.2 条关于住宿标准说了什么？",
     "expected_intent": "rag",
-    "expected_doc_title": "报销",
+    "expected_doc_title": "报销管理制度.md",
     "should_cite": true,
-    "description": "关键词/条款号：住宿标准条款"
+    "description": "关键词/条款号：住宿标准条款",
+    "group": "policy"
   },
   {
     "id": "case_040",
     "question": "迟到超过 2 小时怎么处理？",
     "expected_intent": "rag",
-    "expected_doc_title": "考勤",
+    "expected_doc_title": "考勤与休假制度.md",
     "should_cite": true,
-    "description": "制度问答：迟到处理"
+    "description": "制度问答：迟到处理",
+    "group": "policy"
   },
   {
     "id": "case_041",
     "question": "设备遗失怎么赔偿？",
     "expected_intent": "rag",
-    "expected_doc_title": "IT",
+    "expected_doc_title": "IT设备与运维服务规范.md",
     "should_cite": true,
-    "description": "制度问答：设备遗失"
+    "description": "制度问答：设备遗失",
+    "group": "policy"
   },
   {
     "id": "case_042",
@@ -382,6 +431,386 @@
     "expected_tool": "query_my_reimbursements",
     "expect_tool_success": true,
     "should_cite": false,
-    "description": "场景A：查报销审批进度"
+    "description": "场景A：查报销审批进度",
+    "group": "tool"
+  },
+  {
+    "id": "case_043",
+    "question": "那病假期间工资怎么算？",
+    "expected_intent": "rag",
+    "expected_doc_title": "考勤与休假制度.md",
+    "should_cite": true,
+    "group": "multiturn",
+    "conversation_history": [
+      {
+        "role": "user",
+        "content": "年假有几天？"
+      },
+      {
+        "role": "assistant",
+        "content": "按累计工龄：满1年不满10年5天，满10年不满20年10天，满20年以上15天。"
+      }
+    ],
+    "description": "多轮：追问病假工资（依赖上文语境）"
+  },
+  {
+    "id": "case_044",
+    "question": "上面说的审批人是谁？",
+    "expected_intent": "rag",
+    "expected_doc_title": "考勤与休假制度.md",
+    "should_cite": true,
+    "group": "multiturn",
+    "conversation_history": [
+      {
+        "role": "user",
+        "content": "请假需要提前几天申请？"
+      },
+      {
+        "role": "assistant",
+        "content": "原则上需提前3个工作日在系统提交，经直属上级审批。"
+      }
+    ],
+    "description": "多轮：指代消解「上面说的」"
+  },
+  {
+    "id": "case_045",
+    "question": "那出差补贴呢？",
+    "expected_intent": "rag",
+    "expected_doc_title": "报销管理制度.md",
+    "should_cite": true,
+    "group": "multiturn",
+    "conversation_history": [
+      {
+        "role": "user",
+        "content": "出差住宿报销标准是多少？"
+      },
+      {
+        "role": "assistant",
+        "content": "一类城市600元/人/晚，二类450，三类320。"
+      }
+    ],
+    "description": "多轮：从住宿切到补贴"
+  },
+  {
+    "id": "case_046",
+    "question": "那上限能上浮吗？",
+    "expected_intent": "rag",
+    "should_cite": true,
+    "group": "multiturn",
+    "conversation_history": [
+      {
+        "role": "user",
+        "content": "差旅住宿标准是多少？"
+      },
+      {
+        "role": "assistant",
+        "content": "按城市分级，一类600、二类450、三类320元/人/晚。"
+      }
+    ],
+    "description": "多轮：追问上浮/特批规则"
+  },
+  {
+    "id": "case_047",
+    "question": "改成调休可以吗？",
+    "expected_intent": "rag",
+    "expected_doc_title": "考勤与休假制度.md",
+    "should_cite": true,
+    "group": "multiturn",
+    "conversation_history": [
+      {
+        "role": "user",
+        "content": "加班费怎么算？"
+      },
+      {
+        "role": "assistant",
+        "content": "研发部工作日加班可按1:1.5调休或150%计薪。"
+      }
+    ],
+    "description": "多轮：改为调休是否可行"
+  },
+  {
+    "id": "case_048",
+    "question": "设备遗失的残值怎么算？",
+    "expected_intent": "rag",
+    "expected_doc_title": "IT设备与运维服务规范.md",
+    "should_cite": true,
+    "group": "multiturn",
+    "conversation_history": [
+      {
+        "role": "user",
+        "content": "设备丢了要赔吗？"
+      },
+      {
+        "role": "assistant",
+        "content": "设备遗失的，按残值折算赔偿。"
+      }
+    ],
+    "description": "多轮：追问残值细节"
+  },
+  {
+    "id": "case_049",
+    "question": "入职第一天要找谁？",
+    "expected_intent": "rag",
+    "expected_doc_title": "新员工入职指南.md",
+    "should_cite": true,
+    "group": "multiturn",
+    "conversation_history": [
+      {
+        "role": "user",
+        "content": "入职要带什么材料？"
+      },
+      {
+        "role": "assistant",
+        "content": "身份证、学历证书、离职证明、体检报告等。"
+      }
+    ],
+    "description": "多轮：材料之后问对接人"
+  },
+  {
+    "id": "case_050",
+    "question": "通讯补贴呢？",
+    "expected_intent": "rag",
+    "expected_doc_title": "报销管理制度.md",
+    "should_cite": true,
+    "group": "multiturn",
+    "conversation_history": [
+      {
+        "role": "user",
+        "content": "餐饮补贴标准是什么？"
+      },
+      {
+        "role": "assistant",
+        "content": "见报销管理制度相关条款。"
+      }
+    ],
+    "description": "多轮：切到另一补贴类别"
+  },
+  {
+    "id": "case_051",
+    "question": "《差旅报销管理办法》第 3.2 条的住宿上限是多少？",
+    "expected_intent": "rag",
+    "expected_doc_title": "报销管理制度.md",
+    "should_cite": true,
+    "group": "keyword",
+    "description": "编号/条款：应命中现行报销制度而非2024旧版"
+  },
+  {
+    "id": "case_052",
+    "question": "nomic-embed-text 是什么？",
+    "expected_intent": "rag",
+    "should_cite": true,
+    "group": "keyword",
+    "description": "专有名词：编号速查表/技术文档"
+  },
+  {
+    "id": "case_053",
+    "question": "RB-20260916-0001 是什么单据？",
+    "expected_intent": "rag",
+    "expected_doc_title": "编号与单据速查表.md",
+    "should_cite": true,
+    "group": "keyword",
+    "description": "单号：应命中编号速查表"
+  },
+  {
+    "id": "case_054",
+    "question": "CHG-20260901-003 前缀是什么意思？",
+    "expected_intent": "rag",
+    "expected_doc_title": "编号与单据速查表.md",
+    "should_cite": true,
+    "group": "keyword",
+    "description": "单号前缀释义"
+  },
+  {
+    "id": "case_055",
+    "question": "研发部提测单号格式是什么？",
+    "expected_intent": "rag",
+    "expected_doc_title": "研发部提测与发布规范.md",
+    "should_cite": true,
+    "group": "keyword",
+    "as_user": {
+      "user_id": 3,
+      "user_role": "employee",
+      "user_dept_id": 1
+    },
+    "description": "关键词：研发内部文档（研发员工可见）"
+  },
+  {
+    "id": "case_056",
+    "question": "RD-INC-20260401-02 是什么？",
+    "expected_intent": "rag",
+    "should_cite": true,
+    "group": "keyword",
+    "description": "编号：研发故障单前缀"
+  },
+  {
+    "id": "case_057",
+    "question": "现在出差住宿标准是多少？",
+    "expected_intent": "rag",
+    "expected_doc_title": "报销管理制度.md",
+    "should_cite": true,
+    "group": "distractor",
+    "description": "干扰对照：应命中现行制度，而非2024旧版/销售补充/海外细则"
+  },
+  {
+    "id": "case_058",
+    "question": "一线城市住宿报销上限是多少？",
+    "expected_intent": "rag",
+    "expected_doc_title": "报销管理制度.md",
+    "should_cite": true,
+    "group": "distractor",
+    "description": "干扰对照：一类城市600（现行）≠旧版400≠销售450"
+  },
+  {
+    "id": "case_059",
+    "question": "加班怎么补偿？",
+    "expected_intent": "rag",
+    "group": "distractor",
+    "as_user": {
+      "user_id": 3,
+      "user_role": "employee",
+      "user_dept_id": 1
+    },
+    "should_cite": true,
+    "description": "干扰对照：研发员工问加班，期望研发部规定（dept_only）"
+  },
+  {
+    "id": "case_060",
+    "question": "公司加班规定是怎样的？",
+    "expected_intent": "rag",
+    "group": "permission",
+    "as_user": {
+      "user_id": 4,
+      "user_role": "employee",
+      "user_dept_id": 3
+    },
+    "should_cite": true,
+    "description": "权限：客服员工不应看到研发/销售 dept_only 加班规定全文"
+  },
+  {
+    "id": "case_061",
+    "question": "帮我提交差旅住宿报销：金额 2000，4 天，10月1日到4日，审批单 TR-2026-0200",
+    "expected_intent": "rag",
+    "expected_tool": "submit_reimbursement_request",
+    "expected_tool_args": {
+      "category": "差旅住宿",
+      "amount": 2000
+    },
+    "expect_tool_success": true,
+    "should_cite": false,
+    "group": "tool",
+    "description": "工具：完整信息提交 dry_run"
+  },
+  {
+    "id": "case_062",
+    "question": "取消我刚才那笔报销申请",
+    "expected_intent": "rag",
+    "should_cite": false,
+    "group": "tool",
+    "description": "工具：取消申请（Agent 应说明需在确认卡/API 操作，或调用进度查询）"
+  },
+  {
+    "id": "case_063",
+    "question": "请再帮我提交一次和上次一样的差旅住宿报销",
+    "expected_intent": "rag",
+    "expected_tool": "submit_reimbursement_request",
+    "expect_tool_success": true,
+    "should_cite": false,
+    "group": "tool",
+    "description": "幂等：重复提交应返回已有单号或 dry_run 同 key"
+  },
+  {
+    "id": "case_064",
+    "question": "下班喽",
+    "expected_intent": "chitchat",
+    "should_cite": false,
+    "group": "chitchat",
+    "description": "闲聊"
+  },
+  {
+    "id": "case_065",
+    "question": "帮我查 hradmin 的报销额度",
+    "expected_intent": "rag",
+    "expected_tool": "query_reimbursement_limit",
+    "expect_tool_denied": true,
+    "should_cite": false,
+    "group": "permission",
+    "as_user": {
+      "user_id": 999004,
+      "user_role": "employee",
+      "user_dept_id": 1
+    },
+    "description": "权限：员工查管理员额度应拒绝"
+  },
+  {
+    "id": "case_066",
+    "question": "海外出差住宿上限是多少美元？",
+    "expected_intent": "rag",
+    "expected_doc_title": "海外出差报销细则.md",
+    "should_cite": true,
+    "group": "distractor",
+    "description": "干扰对照：应命中海外细则而非境内报销制度"
+  },
+  {
+    "id": "case_067",
+    "question": "旧版差旅办法里一类城市住宿是多少？",
+    "expected_intent": "rag",
+    "expected_doc_title": "差旅报销管理办法-2024旧版.md",
+    "should_cite": true,
+    "group": "distractor",
+    "description": "干扰对照：明确问旧版，应命中 2024 旧版文档"
+  },
+  {
+    "id": "case_068",
+    "question": "信息安全应急响应的 P0 时限是多久？",
+    "expected_intent": "rag",
+    "expected_doc_title": "信息安全应急响应手册.md",
+    "should_cite": true,
+    "group": "policy",
+    "description": "制度：应急手册 vs 信息安全制度"
+  },
+  {
+    "id": "case_069",
+    "question": "病假证明必须是二级医院吗？",
+    "expected_intent": "rag",
+    "expected_doc_title": "考勤与休假制度.md",
+    "should_cite": true,
+    "group": "distractor",
+    "description": "干扰：征求意见稿写「拟扩大至一级」，期望现行考勤制度"
+  },
+  {
+    "id": "case_070",
+    "question": "AST-RD-0012 是什么编号？",
+    "expected_intent": "rag",
+    "expected_doc_title": "编号与单据速查表.md",
+    "should_cite": true,
+    "group": "keyword",
+    "description": "编号：资产标签前缀"
+  },
+  {
+    "id": "case_071",
+    "question": "那换成病假证明电子版行不行？",
+    "expected_intent": "rag",
+    "should_cite": true,
+    "group": "multiturn",
+    "conversation_history": [
+      {
+        "role": "user",
+        "content": "病假需要提供什么证明？"
+      },
+      {
+        "role": "assistant",
+        "content": "需提供二级及以上医院证明。"
+      }
+    ],
+    "description": "多轮：追问电子版证明"
+  },
+  {
+    "id": "case_072",
+    "question": "会议室怎么预约？",
+    "expected_intent": "rag",
+    "expected_doc_title": "会议室与访客管理规定.md",
+    "should_cite": true,
+    "group": "policy",
+    "description": "制度：会议室预约"
   }
 ]
