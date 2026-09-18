@@ -194,18 +194,27 @@ async def main() -> None:
                 )
         print("报销规则已写入")
 
-        # 额度（按用户职级取 annual_max，已用部分示例）
+        # 额度（按用户职级取 annual_max；示例已用金额）
+        # eval 超管 user_id=1 也需四类额度，否则 case_014 通讯补贴失败
         used_samples = {
             ("zhangsan", "差旅住宿"): 12300,
             ("zhangsan", "交通补贴"): 5600,
             ("zhangsan", "餐饮补贴"): 8200,
             ("zhangsan", "通讯补贴"): 1800,
         }
-        for username, uid in user_ids.items():
-            # 查职级
+        # 除 seed 用户外，给库里已有用户（含 admin）也补额度
+        extra_users = (
+            await db.execute(text("SELECT id, job_level FROM users WHERE is_active = true"))
+        ).all()
+        target_users = {**user_ids}
+        for row in extra_users:
+            target_users[f"_id_{row[0]}"] = int(row[0])
+
+        for username, uid in target_users.items():
             jl = await db.scalar(
                 text("SELECT job_level FROM users WHERE id=:i"), {"i": uid}
             )
+            jl = jl or "mid"
             for category in RULES:
                 annual = RULES[category].get(jl, RULES[category]["mid"])[1]
                 used = used_samples.get((username, category), 0)
@@ -235,7 +244,7 @@ async def main() -> None:
                         ),
                         {"u": uid, "c": category, "a": annual, "used": used},
                     )
-        print("报销额度已写入")
+        print("报销额度已写入（含全部在职用户）")
         await db.commit()
 
     # ── 场景 D：制度文档（四级可见性）────────────────────────

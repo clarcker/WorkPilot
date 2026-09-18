@@ -141,7 +141,7 @@
   },
   {
     "id": "case_017",
-    "question": "我9月20号到22号去北京出差3天，酒店花了1800，帮我提交报销",
+    "question": "请提交差旅住宿报销：金额1800元，3天，9月20号到22号，审批单TR-2026-0100",
     "expected_intent": "rag",
     "expected_tool": "submit_reimbursement_request",
     "expected_tool_args": {
@@ -150,7 +150,7 @@
     },
     "expect_tool_success": true,
     "should_cite": false,
-    "description": "场景A：超标住宿提交（应先 precheck 再 submit，dry_run 不落库）"
+    "description": "场景A：信息齐全时应 precheck→submit，dry_run 不落库"
   },
   {
     "id": "case_018",
