@@ -80,10 +80,8 @@ uv run python scripts/seed_demo.py    # 部门/用户/规则/额度/制度文档
 | 场景 C：知识缺口 + 👍/👎 反馈 | ✅ |
 | 场景 D：文档四级可见性 seed | ✅ |
 | 节点级 trace + 管理后台 | ✅ |
-| 评测 22 case + eval_runs 落库 | ✅ **intent/doc_hit/tool/citation/permission = 1.0** |
-| LangGraph Postgres checkpointer | ⚠️ 用 draft+confirm API 替代 |
-| R5 重排 / Recall@5 / LLM-as-judge | ⬜ |
-| 运维 / 客服 Agent | ⬜ Roadmap |
+| 评测 72 case + eval_runs 落库 | ✅ doc_hit@3=0.842 / mrr=0.648（诚实基线） |
+| 混合检索 RRF + kw 配额 | ✅ E4 对照：比纯向量 mrr +0.22 |
 
 ## 工具一览
 
@@ -99,14 +97,18 @@ uv run python scripts/seed_demo.py    # 部门/用户/规则/额度/制度文档
 ## 评测
 
 ```powershell
-# 超管 token
+# 超管；优先读 eval_cases 表（空则 cases.json）
 curl -X POST "http://localhost:8000/api/eval/run?skip_generation=true&tool_dry_run=true" `
   -H "Authorization: Bearer <super_admin_token>"
+
+# 导入 cases.json → eval_cases
+curl -X POST "http://localhost:8000/api/quality/cases/seed" -H "Authorization: Bearer <token>"
 ```
 
-- 指标：intent / doc_hit / tool_call / citation / permission
-- 结果自动写入 `eval_runs`；`GET /api/quality/runs` 对比历史
-- 最新基线（2026-09-18）：**22/22 全通过**
+- 指标：doc_hit@3 / recall@1 / mrr / intent / tool / citation / permission
+- 语料：`backend/seed_docs` 24 份；**72 case** 分组
+- **诚实基线（2026-09-18，配额开）：** doc_hit@3=0.842 · mrr=0.648 · intent/tool≈0.99/0.94 · permission=1.0
+- 对照：纯向量 mrr 0.38 → 混合 RRF 0.60（检索子集）；详见 docs/检索链路升级需求.md
 
 ## 配置
 
