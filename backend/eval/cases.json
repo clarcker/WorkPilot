@@ -207,5 +207,181 @@
     "expected_doc_title": "报销",
     "should_cite": true,
     "description": "多轮/政策：出差补贴标准（无历史时按独立问题检索报销制度）"
+  },
+  {
+    "id": "case_023",
+    "question": "新员工入职当天要带什么材料？",
+    "expected_intent": "rag",
+    "expected_doc_title": "新员工入职指南",
+    "should_cite": true,
+    "description": "制度问答：入职材料"
+  },
+  {
+    "id": "case_024",
+    "question": "年假可以顺延到什么时候？",
+    "expected_intent": "rag",
+    "expected_doc_title": "考勤",
+    "should_cite": true,
+    "description": "制度问答：年假顺延"
+  },
+  {
+    "id": "case_025",
+    "question": "病假需要提供什么证明？",
+    "expected_intent": "rag",
+    "expected_doc_title": "考勤",
+    "should_cite": true,
+    "description": "制度问答：病假证明"
+  },
+  {
+    "id": "case_026",
+    "question": "设备送修期间有备用机吗？",
+    "expected_intent": "rag",
+    "expected_doc_title": "IT",
+    "should_cite": true,
+    "description": "制度问答：IT 备用机"
+  },
+  {
+    "id": "case_027",
+    "question": "网络连不上应该怎么排查？",
+    "expected_intent": "rag",
+    "expected_doc_title": "IT",
+    "should_cite": true,
+    "description": "制度问答：网络自助排查"
+  },
+  {
+    "id": "case_028",
+    "question": "公司对信息安全有哪些基本要求？",
+    "expected_intent": "rag",
+    "expected_doc_title": "信息安全",
+    "should_cite": true,
+    "description": "制度问答：信息安全"
+  },
+  {
+    "id": "case_029",
+    "question": "加班调休怎么算？",
+    "expected_intent": "rag",
+    "expected_doc_title": "考勤",
+    "should_cite": true,
+    "description": "制度问答：调休"
+  },
+  {
+    "id": "case_030",
+    "question": "帮我查一下员工信息",
+    "expected_intent": "rag",
+    "expected_tool": "query_employee_profile",
+    "expect_tool_success": true,
+    "should_cite": false,
+    "description": "工具：查本人信息"
+  },
+  {
+    "id": "case_031",
+    "question": "我最近有没有待处理的工单？",
+    "expected_intent": "rag",
+    "expected_tool": "query_my_tickets",
+    "expect_tool_success": true,
+    "should_cite": false,
+    "description": "场景B：查我的 IT 工单"
+  },
+  {
+    "id": "case_032",
+    "question": "网络故障，帮我提一个 IT 工单，描述：办公室 Wi-Fi 连不上 Corp-Office",
+    "expected_intent": "rag",
+    "expected_tool": "create_it_ticket",
+    "expected_tool_args": {"issue_type": "网络故障"},
+    "expect_tool_success": true,
+    "should_cite": false,
+    "description": "场景B：带描述创建工单"
+  },
+  {
+    "id": "case_033",
+    "question": "请预审：交通补贴，金额 500 元",
+    "expected_intent": "rag",
+    "expected_tool": "precheck_reimbursement",
+    "expected_tool_args": {"category": "交通补贴", "amount": 500},
+    "expect_tool_success": true,
+    "should_cite": false,
+    "description": "场景A：交通补贴预审"
+  },
+  {
+    "id": "case_034",
+    "question": "帮我提交餐饮补贴报销 300 元，日期 2026-09-01 到 2026-09-01",
+    "expected_intent": "rag",
+    "expected_tool": "submit_reimbursement_request",
+    "expected_tool_args": {"category": "餐饮补贴", "amount": 300},
+    "expect_tool_success": true,
+    "should_cite": false,
+    "description": "场景A：餐饮补贴提交（dry_run）"
+  },
+  {
+    "id": "case_035",
+    "question": "你好呀",
+    "expected_intent": "chitchat",
+    "should_cite": false,
+    "description": "闲聊：问候变体"
+  },
+  {
+    "id": "case_036",
+    "question": "今天天气不错",
+    "expected_intent": "chitchat",
+    "should_cite": false,
+    "description": "闲聊：无关话题"
+  },
+  {
+    "id": "case_037",
+    "question": "薪酬调整方案里写了什么？",
+    "expected_intent": "rag",
+    "forbidden_doc_title": "薪酬调整",
+    "should_cite": false,
+    "as_user": {
+      "user_id": 999002,
+      "user_role": "employee",
+      "user_dept_id": 6
+    },
+    "description": "权限：客服员工不可见薪酬（specific_users 白名单外）"
+  },
+  {
+    "id": "case_038",
+    "question": "研发提测流程是怎样的？",
+    "expected_intent": "rag",
+    "should_cite": true,
+    "as_user": {
+      "user_id": 999003,
+      "user_role": "employee",
+      "user_dept_id": 6
+    },
+    "description": "权限：无研发内部文档时应如实说明，不编造且不泄密"
+  },
+  {
+    "id": "case_039",
+    "question": "第 3.2 条关于住宿标准说了什么？",
+    "expected_intent": "rag",
+    "expected_doc_title": "报销",
+    "should_cite": true,
+    "description": "关键词/条款号：住宿标准条款"
+  },
+  {
+    "id": "case_040",
+    "question": "迟到超过 2 小时怎么处理？",
+    "expected_intent": "rag",
+    "expected_doc_title": "考勤",
+    "should_cite": true,
+    "description": "制度问答：迟到处理"
+  },
+  {
+    "id": "case_041",
+    "question": "设备遗失怎么赔偿？",
+    "expected_intent": "rag",
+    "expected_doc_title": "IT",
+    "should_cite": true,
+    "description": "制度问答：设备遗失"
+  },
+  {
+    "id": "case_042",
+    "question": "我的报销申请都批了吗？",
+    "expected_intent": "rag",
+    "expected_tool": "query_my_reimbursements",
+    "expect_tool_success": true,
+    "should_cite": false,
+    "description": "场景A：查报销审批进度"
   }
 ]
