@@ -130,10 +130,20 @@ async def list_gaps(
         )
     ).scalars().all()
 
-    # 简单按 query 前缀聚合计数
-    from collections import Counter
-    keys = [r.query[:20] for r in rows]
-    freq = Counter(keys)
+    # 全库按 query 前 20 字聚合频次（SQL，跨页有效）
+    prefix_expr = func.substr(QARecord.query, 1, 20)
+    freq_q = (
+        select(prefix_expr.label("pfx"), func.count().label("cnt"))
+        .where(QARecord.is_gap == True)  # noqa: E712
+        .where(QARecord.gap_resolved == resolved)
+        .group_by(prefix_expr)
+    )
+    if current_user.role == UserRole.dept_admin:
+        freq_q = freq_q.where(QARecord.dept_id == current_user.dept_id)
+    elif dept_id:
+        freq_q = freq_q.where(QARecord.dept_id == dept_id)
+    freq_rows = (await db.execute(freq_q)).all()
+    freq = {r.pfx: int(r.cnt) for r in freq_rows}
 
     items = [
         {
@@ -147,7 +157,7 @@ async def list_gaps(
             "answer_preview": r.answer_preview,
             "dept_id": r.dept_id,
             "user_id": r.user_id,
-            "freq": freq.get(r.query[:20], 1),
+            "freq": freq.get((r.query or "")[:20], 1),
             "created_at": r.created_at.isoformat() if r.created_at else None,
         }
         for r in rows
