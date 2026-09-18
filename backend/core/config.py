@@ -100,8 +100,8 @@ class Settings(BaseSettings):
     retrieval_top_k: int = 5
     retrieval_min_score: float = 0.25
     retrieval_enable_fts: bool = True
-    # E5 默认关闭：配额与纯 RRF 在对照中 mrr 无差
-    retrieval_must_include: bool = False
+    # E5：全链路配额增益 mrr+0.06>0.02，默认开启（实现为 kw 配额而非 must 优先排序）
+    retrieval_must_include: bool = True
     retrieval_merge_chunks: bool = True
     retrieval_rrf_k: int = 60
     retrieval_w_vec: float = 0.7
