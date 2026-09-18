@@ -205,17 +205,19 @@ async def _merge_chunks(
                 m = {**m, "content": "\n".join(neighbors + [m["content"]])}
         expanded.append(m)
 
-    # 按融合分排序（混合检索时 rrf_score 更公平）；预算截断时优先保留高分
+    # must_include 优先，再按融合分
     expanded.sort(
-        key=lambda x: x.get("rrf_score") or x.get("score") or 0,
-        reverse=True,
+        key=lambda x: (
+            0 if x.get("must_include") else 1,
+            -(x.get("rrf_score") or x.get("score") or 0),
+        ),
     )
     total = 0
     result: list[RetrievedChunk] = []
     for m in expanded:
         clen = len(m["content"])
-        if total + clen > budget and result:
-            # 预算满后仍允许短块进入，避免整份文档被长块挤掉
+        must = bool(m.get("must_include"))
+        if total + clen > budget and result and not must:
             if clen > 400:
                 continue
         total += clen
@@ -237,13 +239,12 @@ async def _merge_chunks(
 
 
 def _flatten_group(group: list[dict]) -> dict:
-    """相邻块合并为一条，score 取组内最高。"""
+    """相邻块合并为一条；must_include 任一组员为真则保留。"""
     base = group[0]
     contents = []
     seen_prefix = ""
     for g in group:
         c = g["content"]
-        # 去 overlap：若前缀重合则去掉
         if seen_prefix and c.startswith(seen_prefix[:40]):
             c = c[len(seen_prefix[:40]):]
         elif contents and contents[-1].endswith(c[:40]):
@@ -254,6 +255,9 @@ def _flatten_group(group: list[dict]) -> dict:
         **base,
         "content": "\n".join(contents),
         "score": max(float(g.get("score") or 0) for g in group),
+        "rrf_score": max(float(g.get("rrf_score") or 0) for g in group),
+        "must_include": any(bool(g.get("must_include")) for g in group),
+        "kw_rank": min((g.get("kw_rank") for g in group if g.get("kw_rank")), default=None),
     }
 
 
@@ -307,7 +311,7 @@ async def retrieve(
         # 构建 chunk_id → meta；score 用于展示，rrf_score 用于排序
         meta: dict[int, dict] = {}
         rrf_scores: dict[int, float] = {}
-        for w, ranked in ((0.7, vec_ids), (0.3, kw_ids)):
+        for w, ranked in ((0.65, vec_ids), (0.35, kw_ids)):
             for rank, cid in enumerate(ranked, 1):
                 rrf_scores[cid] = rrf_scores.get(cid, 0.0) + w / (60 + rank)
 
@@ -334,17 +338,23 @@ async def retrieve(
                     "file_name": r.get("file_name"),
                 }
 
-        # RRF 排序
+        # 保证两路 Top3 一定进入合并候选，避免专有词命中被 RRF 压掉
+        must_ids = set(vec_ids[:3]) | set(kw_ids[:3])
+        for m in meta.values():
+            m["must_include"] = m["chunk_id"] in must_ids
         ordered = sorted(
             meta.values(),
-            key=lambda m: m.get("rrf_score") or 0,
-            reverse=True,
+            key=lambda m: (
+                0 if m.get("must_include") else 1,
+                -(m.get("rrf_score") or 0),
+            ),
         )
 
-        chunks = await _merge_chunks(db, ordered[: top_k * 3])
+        chunks = await _merge_chunks(db, ordered[: max(top_k * 4, 20)])
 
     logger.debug(
         f"[retriever] user={user_id} vec={len(vec_rows)} kw={len(kw_rows)} "
-        f"merged={len(chunks)}"
+        f"merged={len(chunks)} must={sorted(must_ids)} "
+        f"kw_ids={kw_ids[:5]} out={[c['chunk_id'] for c in chunks]}"
     )
     return chunks[:top_k]
