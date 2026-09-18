@@ -195,58 +195,72 @@ async def gap_to_eval(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    场景 C：把知识缺口问题写入 golden cases（eval/cases.json）。
-    注意：生产多 worker 应写 eval_cases 表；当前为单机演示路径。
+    场景 C：知识缺口 → eval_cases 表（不再写源码树 cases.json）。
     """
-    import json
-    from pathlib import Path
-
     rec = await _load_gap_for_admin(db, qa_id, current_user)
     question = (rec.query or "").strip()
     if not question:
         raise HTTPException(400, detail={"code": 40010, "message": "问题为空，无法入库"})
 
-    cases_path = Path(__file__).resolve().parents[1] / "eval" / "cases.json"
-    try:
-        cases = json.loads(cases_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise HTTPException(500, detail={"code": 50001, "message": f"读取 cases.json 失败: {exc}"})
+    from db.models import EvalCase
+    existing = await db.scalar(
+        select(EvalCase).where(EvalCase.question == question, EvalCase.active == True)  # noqa: E712
+    )
+    if existing:
+        return BaseResp.ok({
+            "case_id": existing.case_id,
+            "message": "该问题已在评测集中",
+            "duplicated": True,
+        })
 
-    for c in cases:
-        if (c.get("question") or "").strip() == question:
-            return BaseResp.ok({
-                "case_id": c.get("id"),
-                "message": "该问题已在评测集中",
-                "duplicated": True,
-            })
+    # 取下一个 case 编号
+    from sqlalchemy import func
+    max_num = await db.scalar(
+        select(func.max(EvalCase.case_id))
+    )
+    n = 1
+    if max_num and str(max_num).startswith("case_"):
+        try:
+            n = int(str(max_num).split("_", 1)[1]) + 1
+        except ValueError:
+            n = 1
+    else:
+        cnt = await db.scalar(select(func.count()).select_from(EvalCase)) or 0
+        n = cnt + 1
+    case_id = f"case_{n:03d}"
 
-    nums = []
-    for c in cases:
-        cid = str(c.get("id") or "")
-        if cid.startswith("case_"):
-            try:
-                nums.append(int(cid.split("_", 1)[1]))
-            except ValueError:
-                pass
-    next_n = (max(nums) + 1) if nums else 1
-    case_id = f"case_{next_n:03d}"
-
-    new_case = {
+    payload = {
         "id": case_id,
         "question": question,
         "expected_intent": rec.intent or "rag",
         "should_cite": True,
         "group": "gap",
-        "description": f"知识缺口导入 qa_id={qa_id}（补文档后可填 expected_doc_title）",
+        "description": f"知识缺口导入 qa_id={qa_id}",
     }
-    cases.append(new_case)
-    cases_path.write_text(
-        json.dumps(cases, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    db.add(EvalCase(
+        case_id=case_id,
+        question=question,
+        group="gap",
+        payload=payload,
+        source="gap",
+        active=True,
+        created_by=current_user.id,
+    ))
+    await db.commit()
     return BaseResp.ok({
         "case_id": case_id,
         "question": question,
-        "message": "已加入评测集，补文档后可重跑 eval",
+        "message": "已写入 eval_cases，重跑 eval 生效",
         "duplicated": False,
     })
+
+
+@router.post("/cases/seed", response_model=BaseResp[dict])
+async def seed_cases_from_json(
+    current_user: User = Depends(require_super_admin),
+):
+    """把 eval/cases.json 导入 eval_cases 表（首次或 json 更新后调用）。"""
+    from eval.runner import seed_eval_cases_from_json
+
+    n = await seed_eval_cases_from_json(created_by=current_user.id)
+    return BaseResp.ok({"imported": n})

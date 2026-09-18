@@ -604,3 +604,23 @@ class EvalRun(Base):
     failed_cases:     Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     operator_id:      Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     note:             Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+
+# =============================================
+# eval_cases（golden case 持久化；cases.json 仅作初始导入）
+# =============================================
+
+class EvalCase(Base):
+    __tablename__ = "eval_cases"
+
+    id:         Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    case_id:    Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+    question:   Mapped[str] = mapped_column(Text, nullable=False)
+    group:      Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    payload:    Mapped[dict] = mapped_column(JSONB, nullable=False)
+    source:     Mapped[str] = mapped_column(String(20), nullable=False, default="seed")
+    active:     Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

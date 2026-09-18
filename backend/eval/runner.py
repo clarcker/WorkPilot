@@ -97,8 +97,63 @@ async def warmup() -> float:
 
 
 def load_cases() -> list[dict]:
+    """读取 eval/cases.json（脚本/单测用；线上 eval API 优先读 eval_cases 表）。"""
     with open(_CASES_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _load_from_json() -> list[dict]:
+    return load_cases()
+
+
+async def load_cases_from_db() -> list[dict]:
+    """从 eval_cases 表读取 active case；表空则回退 json。"""
+    try:
+        from sqlalchemy import select
+        from db.models import EvalCase
+        from db.session import async_session_factory
+
+        async with async_session_factory() as db:
+            rows = (
+                await db.execute(select(EvalCase).where(EvalCase.active == True))  # noqa: E712
+            ).scalars().all()
+        if rows:
+            return [dict(r.payload) for r in rows]
+    except Exception as exc:
+        logger.debug(f"[eval] load_cases_from_db fallback json: {exc}")
+    return load_cases()
+
+
+async def seed_eval_cases_from_json(created_by: int | None = None) -> int:
+    """把 cases.json 导入 eval_cases（按 case_id upsert）。需独立 engine。"""
+    from sqlalchemy import select
+    from db.models import EvalCase
+    from db.session import async_session_factory
+
+    cases = load_cases()
+    n = 0
+    async with async_session_factory() as db:
+        for c in cases:
+            cid = str(c.get("id") or f"case_auto_{n}")
+            existing = await db.scalar(select(EvalCase).where(EvalCase.case_id == cid))
+            if existing:
+                existing.payload = c
+                existing.question = c.get("question") or ""
+                existing.group = c.get("group")
+                existing.active = True
+            else:
+                db.add(EvalCase(
+                    case_id=cid,
+                    question=c.get("question") or "",
+                    group=c.get("group"),
+                    payload=c,
+                    source="seed",
+                    active=True,
+                    created_by=created_by,
+                ))
+            n += 1
+        await db.commit()
+    return n
 
 
 def _args_match(expected: dict, actual: dict) -> tuple[bool, str]:
@@ -340,7 +395,7 @@ async def run_eval(
                          想看真实单条延迟请保持 1。
         timeout:         单条 case 墙钟上限
     """
-    cases = load_cases()
+    cases = await load_cases_from_db()
     if not cases:
         return EvalReport(total_cases=0, scored_cases=0, timeout_count=0,
                           intent_accuracy=0, doc_hit_rate=0, tool_call_accuracy=0,
