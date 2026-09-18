@@ -205,14 +205,19 @@ async def _merge_chunks(
                 m = {**m, "content": "\n".join(neighbors + [m["content"]])}
         expanded.append(m)
 
-    # 按 score 降序，预算截断
-    expanded.sort(key=lambda x: x.get("score") or 0, reverse=True)
+    # 按融合分排序（混合检索时 rrf_score 更公平）；预算截断时优先保留高分
+    expanded.sort(
+        key=lambda x: x.get("rrf_score") or x.get("score") or 0,
+        reverse=True,
+    )
     total = 0
     result: list[RetrievedChunk] = []
     for m in expanded:
         clen = len(m["content"])
         if total + clen > budget and result:
-            break
+            # 预算满后仍允许短块进入，避免整份文档被长块挤掉
+            if clen > 400:
+                continue
         total += clen
         result.append(RetrievedChunk(
             chunk_id=m["chunk_id"],
@@ -226,6 +231,8 @@ async def _merge_chunks(
             vec_score=m.get("vec_score"),
             kw_rank=m.get("kw_rank"),
         ))
+        if len(result) >= 12:
+            break
     return result
 
 
