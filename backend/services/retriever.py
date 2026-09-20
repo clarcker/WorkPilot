@@ -114,19 +114,24 @@ async def _vector_search(
     cand_k: int,
     min_score: float,
 ) -> list[dict]:
+    """候选扩展 → 阈值 → 与 top_k 解耦的 SQL 过滤（R2）。"""
     await _set_hnsw_params(db, cand_k)
 
     sql = text(f"""
-        SELECT
-            dc.id AS chunk_id, dc.doc_id, dc.content, dc.heading,
-            dc.page_no, dc.chunk_index, d.file_name,
-            1 - (e.embedding <=> CAST(:query_vec AS vector)) AS score
-        FROM embeddings e
-        JOIN doc_chunks dc ON dc.id = e.chunk_id
-        JOIN documents  d  ON d.id  = e.doc_id
-        WHERE d.status = 'ready' AND ({vis_clause})
-        ORDER BY e.embedding <=> CAST(:query_vec AS vector)
-        LIMIT :candidate_k
+        SELECT * FROM (
+            SELECT
+                dc.id AS chunk_id, dc.doc_id, dc.content, dc.heading,
+                dc.page_no, dc.chunk_index, d.file_name,
+                1 - (e.embedding <=> CAST(:query_vec AS vector)) AS score
+            FROM embeddings e
+            JOIN doc_chunks dc ON dc.id = e.chunk_id
+            JOIN documents  d  ON d.id  = e.doc_id
+            WHERE d.status = 'ready' AND ({vis_clause})
+            ORDER BY e.embedding <=> CAST(:query_vec AS vector)
+            LIMIT :candidate_k
+        ) candidates
+        WHERE score >= :min_score
+        ORDER BY score DESC
     """)
     rows = (
         await db.execute(sql, {
@@ -134,9 +139,10 @@ async def _vector_search(
             "user_id": user_id,
             "user_dept_id": user_dept_id,
             "candidate_k": cand_k,
+            "min_score": min_score,
         })
     ).mappings().all()
-    return [dict(r) for r in rows if float(r["score"]) >= min_score]
+    return [dict(r) for r in rows]
 
 
 async def _keyword_search(
@@ -240,10 +246,10 @@ async def _merge_chunks(
             {**h} for h in hits
         ][: settings.retrieval_top_k]
 
-    # must_include 优先，再按融合分
+    # pinned（配额换入）优先，再按融合分；不再使用 must_include
     expanded.sort(
         key=lambda x: (
-            0 if x.get("must_include") else 1,
+            0 if x.get("pinned") else 1,
             -(x.get("rrf_score") or x.get("score") or 0),
         ),
     )
@@ -251,8 +257,8 @@ async def _merge_chunks(
     result: list[RetrievedChunk] = []
     for m in expanded:
         clen = len(m["content"])
-        must = bool(m.get("must_include"))
-        if total + clen > budget and result and not must:
+        pinned = bool(m.get("pinned"))
+        if total + clen > budget and result and not pinned:
             if clen > 400:
                 continue
         total += clen
@@ -287,7 +293,7 @@ def _flatten_group(group: list[dict]) -> dict:
         "content": "\n".join(contents),
         "score": max(float(g.get("score") or 0) for g in group),
         "rrf_score": max(float(g.get("rrf_score") or 0) for g in group),
-        "must_include": any(bool(g.get("must_include")) for g in group),
+        "pinned": any(bool(g.get("pinned")) for g in group),
         "kw_rank": min((g.get("kw_rank") for g in group if g.get("kw_rank")), default=None),
     }
 
@@ -378,7 +384,8 @@ async def retrieve(
                     "file_name": r.get("file_name"),
                 }
 
-        # E5：不再 must 优先排序；改为关键词配额（默认至少 2 条 kw 命中进入 top_k）
+        # E5：关键词配额——换入项标 pinned，合并阶段按 (not pinned, -rrf) 排序，
+        # 避免二次 sort 把低分 kw 项挤回末尾（否则配额是空操作）。
         kw_quota = 2 if settings.retrieval_must_include else 0
         ordered = sorted(
             meta.values(),
@@ -386,10 +393,10 @@ async def retrieve(
             reverse=True,
         )
         if kw_quota > 0 and kw_ids:
-            top = ordered[:top_k]
+            orig_ids = {m["chunk_id"] for m in ordered[:top_k]}
+            top = list(ordered[:top_k])
             top_kw = [m for m in top if m.get("kw_rank") is not None]
             if len(top_kw) < kw_quota:
-                # 从 RRF 序中取尚未进入 top 的关键词命中，替换末位非 kw
                 rest_kw = [
                     m for m in ordered[top_k:]
                     if m.get("kw_rank") is not None
@@ -399,7 +406,13 @@ async def retrieve(
                     if not non_kw_tail:
                         break
                     top[non_kw_tail.pop()] = m
-                ordered = top + [m for m in ordered[top_k:] if m not in top]
+                for m in top:
+                    m["pinned"] = m["chunk_id"] not in orig_ids
+                kept = {m["chunk_id"] for m in top}
+                ordered = top + [m for m in ordered[top_k:] if m["chunk_id"] not in kept]
+            else:
+                for m in top:
+                    m["pinned"] = False
 
         chunks = await _merge_chunks(db, ordered[: max(top_k * 4, 20)])
 

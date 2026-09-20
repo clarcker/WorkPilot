@@ -33,9 +33,8 @@ tool_timeout: 15.0
 retrieval_top_k: 5
 retrieval_min_score: 0.25
 retrieval_enable_fts: true
-# E5：全链路 72 case 上 kw 配额 mrr +0.063（>0.02）→ 默认开启；
-# 仅检索子集无增益，差异来自 LLM rewrite 后的 query 分布
-retrieval_must_include: true
+# E5：修复 pinned 后 3 次 A/B，配额 on/off mrr 完全相同（delta=0）→ 默认关闭
+retrieval_must_include: false
 retrieval_merge_chunks: true
 retrieval_rrf_k: 60
 retrieval_w_vec: 0.7
