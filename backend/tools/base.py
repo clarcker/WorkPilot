@@ -83,6 +83,48 @@ def _build_params_schema(func: Callable) -> dict:
     return schema
 
 
+def validate_tool_args(schema: dict, args: dict) -> tuple[bool, str]:
+    """
+    P7：按 JSON Schema 校验工具参数（类型 / 枚举 / 必填）。
+    返回 (ok, error_message)。
+    """
+    if not schema:
+        return True, ""
+    props = schema.get("properties") or {}
+    required = schema.get("required") or []
+    for key in required:
+        if key not in args or args[key] in (None, ""):
+            return False, f"缺少必填参数: {key}"
+    for key, val in args.items():
+        if key not in props:
+            continue  # 允许额外键由工具自行忽略
+        spec = props[key] or {}
+        if val is None or val == "":
+            continue
+        expected = spec.get("type")
+        enum = spec.get("enum")
+        if enum and val not in enum:
+            return False, f"参数 {key} 不在允许取值: {enum}"
+        if expected == "integer":
+            try:
+                int(val)
+            except (TypeError, ValueError):
+                return False, f"参数 {key} 必须为整数"
+        elif expected == "number":
+            try:
+                float(val)
+            except (TypeError, ValueError):
+                return False, f"参数 {key} 必须为数字"
+        elif expected == "string" and not isinstance(val, str):
+            # 允许 int→str 由 coerce 处理
+            pass
+        elif expected == "array" and not isinstance(val, list):
+            return False, f"参数 {key} 必须为数组"
+        elif expected == "object" and not isinstance(val, dict):
+            return False, f"参数 {key} 必须为对象"
+    return True, ""
+
+
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, ToolDef] = {}
@@ -135,6 +177,9 @@ class ToolRegistry:
                 return ToolResult(
                     success=False, error=f"Missing required parameter: {param_name}"
                 )
+        ok, err = validate_tool_args(td.params_schema, args)
+        if not ok:
+            return ToolResult(success=False, error=f"参数校验失败: {err}")
 
         coerced_args = dict(args)
         for param_name, prop in td.params_schema.get("properties", {}).items():

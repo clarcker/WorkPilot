@@ -28,6 +28,8 @@ from api import traces as traces_router
 from api import tickets as tickets_router
 from api import ticket_admin as ticket_admin_router
 from api import quality as quality_router
+from api import notifications as notif_router
+from api import embeddings_admin as emb_router
 
 
 # ------------------------------------------------------------------
@@ -51,7 +53,20 @@ async def lifespan(app: FastAPI):
     from core.config import describe_llm_routing
     logger.info("[llm] routing | {r}", r=describe_llm_routing())
 
-    # 后台清理：归档会话过期 + 过期吊销 token
+    # P4 prompt 版本：启动即校验，缺失直接失败
+    try:
+        from services.prompt_loader import current_prompt_set, load_prompts
+        load_prompts()
+        logger.info("[prompts] set_version={v}", v=current_prompt_set())
+    except Exception as exc:
+        logger.error("[prompts] 加载失败（阻断启动）: {e}", e=exc)
+        raise
+
+    # P2 APScheduler（PostgreSQLJobStore）
+    from services.scheduler import start_scheduler, stop_scheduler
+    await start_scheduler()
+
+    # 保留 cleanup_loop 作为 scheduler 失败时的兜底（单 worker 有效）
     from services.cleanup import cleanup_loop
     stop_event = asyncio.Event()
     cleanup_task = asyncio.create_task(cleanup_loop(stop_event))
@@ -59,6 +74,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # 关闭
+    stop_scheduler()
     stop_event.set()
     cleanup_task.cancel()
     try:
@@ -156,6 +172,8 @@ app.include_router(traces_router.router, prefix="/api/admin/traces",       tags=
 app.include_router(tickets_router.router, prefix="/api/tickets",           tags=["IT 工单"])
 app.include_router(ticket_admin_router.router, prefix="/api/admin/tickets", tags=["工单处理"])
 app.include_router(quality_router.router,   prefix="/api/quality",         tags=["评测/反馈/缺口"])
+app.include_router(notif_router.router,     prefix="/api/admin",            tags=["通知"])
+app.include_router(emb_router.router,       prefix="/api/admin",            tags=["embedding"])
 
 
 # ------------------------------------------------------------------

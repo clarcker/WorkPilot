@@ -95,6 +95,20 @@ class Settings(BaseSettings):
     llm_complete_timeout: float = 120.0
     llm_stream_timeout: float = 300.0
     tool_timeout: float = 15.0
+    # P1 LLM 可靠性
+    llm_retry_max: int = 3
+    llm_retry_base_delay: float = 0.5
+    llm_circuit_fail_threshold: int = 5
+    llm_circuit_open_seconds: float = 30.0
+    llm_max_concurrency_local: int = 2
+    llm_max_concurrency_external: int = 8
+    llm_queue_timeout: float = 20.0
+    llm_fallback_enabled: bool = True
+    # P2 调度
+    scheduler_enabled: bool = True
+    daily_report_hour: int = 9
+    # P4 prompt
+    prompts_dir: str = "prompts"
 
     # 检索（R2/R3 + E4 对照开关）
     retrieval_top_k: int = 5

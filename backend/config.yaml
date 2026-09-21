@@ -28,6 +28,18 @@ llm_connect_timeout: 10.0
 llm_complete_timeout: 120.0
 llm_stream_timeout: 300.0
 tool_timeout: 15.0
+# P1：重试 / 熔断 / 并发 / 降级
+llm_retry_max: 3
+llm_retry_base_delay: 0.5
+llm_circuit_fail_threshold: 5
+llm_circuit_open_seconds: 30
+llm_max_concurrency_local: 2
+llm_max_concurrency_external: 8
+llm_queue_timeout: 20
+llm_fallback_enabled: true
+# P2：APScheduler（PostgreSQLJobStore）
+scheduler_enabled: true
+daily_report_hour: 9
 
 # 检索：与线上评测一致；TopK 过大会在小语料上抬高 doc_hit（天花板）
 retrieval_top_k: 5

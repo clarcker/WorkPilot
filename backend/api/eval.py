@@ -122,6 +122,11 @@ async def _persist_run(
         row.mode = payload.get("mode") or "fast"
         row.status = status
         row.progress = progress if progress is not None else payload["total_cases"]
+        try:
+            from services.prompt_loader import current_prompt_set
+            row.prompt_set_version = current_prompt_set()
+        except Exception:
+            pass
         await db.commit()
         return int(row.id)
 

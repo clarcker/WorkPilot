@@ -364,6 +364,24 @@ async def _rag_gen(
         if app_settings.llm_provider == "openai_compatible"
         else app_settings.ollama_chat_model
     )
+    try:
+        from services.llm_resilience import llm_meta_var
+        from services.prompt_loader import current_prompt_set
+        lmeta = dict(llm_meta_var.get() or {})
+        pset = current_prompt_set()
+        if lmeta:
+            steps = list(steps) + [{
+                "node": "llm_resilience",
+                "output_summary": (
+                    f"provider={lmeta.get('provider')} circuit={lmeta.get('circuit_state')} "
+                    f"fallback={lmeta.get('fallback_provider')} retries={lmeta.get('retries')}"
+                ),
+                "latency_ms": 0,
+            }]
+            if lmeta.get("provider"):
+                llm_model = f"{lmeta.get('provider')}:{llm_model}"
+    except Exception:
+        pset = None
     db.add(AgentTrace(
         conversation_id=conv.id,
         user_id=user_id,
@@ -375,6 +393,7 @@ async def _rag_gen(
         final_answer=(full_answer or "")[:4000],
         sources=sources or None,
         llm_model=llm_model,
+        prompt_set_version=pset,
         error=final_state.get("error"),
     ))
     is_gap = (

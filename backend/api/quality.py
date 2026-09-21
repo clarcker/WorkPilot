@@ -62,6 +62,7 @@ async def list_eval_runs(
             "points_coverage": r.points_coverage,
             "hallucination_count": r.hallucination_count,
             "refusal_correct_rate": r.refusal_correct_rate,
+            "prompt_set_version": r.prompt_set_version,
         }
         for r in rows
     ])
@@ -93,6 +94,7 @@ async def get_eval_run(
         "points_coverage": r.points_coverage,
         "hallucination_count": r.hallucination_count,
         "refusal_correct_rate": r.refusal_correct_rate,
+        "prompt_set_version": r.prompt_set_version,
         "metrics": {
             "intent_accuracy": r.intent_accuracy,
             "doc_hit_rate": r.doc_hit_rate,
@@ -178,8 +180,11 @@ async def diff_eval_runs(
         else:
             by_group[g]["still_fail"] += 1
     return BaseResp.ok({
-        "run_a": {"id": a.id, "label": a.label, "mode": a.mode},
-        "run_b": {"id": b.id, "label": b.label, "mode": b.mode},
+        "run_a": {"id": a.id, "label": a.label, "mode": a.mode,
+                  "prompt_set_version": a.prompt_set_version},
+        "run_b": {"id": b.id, "label": b.label, "mode": b.mode,
+                  "prompt_set_version": b.prompt_set_version},
+        "prompt_changed": (a.prompt_set_version or "") != (b.prompt_set_version or ""),
         "became_pass": became_pass,
         "became_fail": became_fail,
         "still_fail": still_fail,

@@ -20,15 +20,20 @@
 | Docker | PostgreSQL（compose 或本机） |
 | Python 3.11+ / uv | 后端 |
 | Node 18+ | 前端 |
-| Ollama（可选） | 本地模型；已配 `OPENAI_API_KEY` 可用外部 API 全程替代 |
+| Ollama（可选） | 本地模型；**默认推荐外部 API**（`llm_provider: openai_compatible` + `OPENAI_API_KEY`） |
+
+**模型路径**
+
+| 模式 | 配置 | 说明 |
+|---|---|---|
+| 外部 API（默认） | `config.yaml` `llm_provider: openai_compatible` + `.env` `OPENAI_API_KEY` | 演示/开发更快；出口自动脱敏 |
+| 离线 / 数据不出网 | `llm_provider: ollama` | 本地演示可用 `qwen2.5:3b`；embedding 建议 `nomic-embed-text` |
 
 **Ollama 拉模型（若走本地，首次约 5–15 分钟，视带宽）：**
 
 ```bash
 ollama pull nomic-embed-text
-ollama pull qwen2.5:7b
-# 无本地模型时：backend/.env 配 OPENAI_API_KEY + config.yaml 中 llm_provider: openai_compatible
-# embedding 仍需 Ollama nomic-embed-text（或改 embedder 指向外部）
+ollama pull qwen2.5:3b    # 演示；质量更高用 qwen2.5:7b
 ```
 
 **启动**
@@ -248,6 +253,21 @@ PATCH /api/quality/eval-cases/{case_id}
 | `backend/.env` | JWT、DATABASE_URL、OPENAI_API_KEY |
 
 优先级：环境变量 > `.env` > `config.yaml` > 代码默认值。
+
+---
+
+## 性能与可靠性
+
+- 压测脚本与表格模板：[docs/性能基线.md](docs/性能基线.md)（数字本机填写）
+- LLM：指数退避重试、provider 熔断、外部→本地降级、并发 `queued` SSE；配置见 `config.yaml`（`llm_*`）
+- 定时任务：APScheduler + PostgreSQLJobStore（cleanup / 部门日报）
+- Prompt 版本：`backend/prompts/`，`eval_runs.prompt_set_version` / trace 可对比
+- 安全与威胁模型：[docs/安全设计.md](docs/安全设计.md)
+- 进度唯一入口：[docs/STATUS.md](docs/STATUS.md)
+
+## 在线演示
+
+⬜ 待部署：docker compose + 外部 API + `seed_demo`；演示账号只读。录屏素材路径见 STATUS / 生产就绪需求 P8。
 
 ---
 

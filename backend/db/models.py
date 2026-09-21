@@ -530,6 +530,27 @@ class ReimbursementRequest(Base):
 # agent_traces（节点级追踪）
 # =============================================
 
+class Notification(Base):
+    """P9：管理端通知（日报等）。"""
+    __tablename__ = "notifications"
+
+    id:         Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id:    Mapped[int] = mapped_column(Integer, nullable=False)
+    title:      Mapped[str] = mapped_column(String(255), nullable=False)
+    body:       Mapped[str] = mapped_column(Text, nullable=False)
+    level:      Mapped[str] = mapped_column(String(20), nullable=False, default="info")
+    source:     Mapped[str] = mapped_column(String(50), nullable=False, default="system")
+    payload:    Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    is_read:    Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("idx_notifications_user", "user_id", "is_read", "created_at"),
+    )
+
+
 class AgentTrace(Base):
     __tablename__ = "agent_traces"
 
@@ -546,6 +567,7 @@ class AgentTrace(Base):
     final_answer:    Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     sources:         Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     llm_model:       Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    prompt_set_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     total_latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     error:           Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at:      Mapped[datetime.datetime] = mapped_column(
@@ -631,6 +653,7 @@ class EvalRun(Base):
     mode:                 Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default="fast")
     progress:             Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
     status:               Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default="finished")
+    prompt_set_version:   Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
 
 
 # =============================================

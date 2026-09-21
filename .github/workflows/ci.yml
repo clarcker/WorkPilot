@@ -72,8 +72,20 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://workpilot:ci@127.0.0.1:5432/workpilot_ci
           TEST_DATABASE_URL: postgresql+asyncpg://workpilot:ci@127.0.0.1:5432/workpilot_ci
         run: |
-          # 依赖 Ollama/embedding 的用例由 conftest mock；跑与模型无关的鉴权/生命周期/API
           uv run pytest tests/integration/test_doc_lifecycle_authz.py tests/integration/test_documents.py tests/integration/test_users.py tests/integration/test_departments.py -q --tb=line
+
+      - name: Retrieval-layer eval gate (fixture embeddings)
+        env:
+          ENVIRONMENT: test
+          JWT_SECRET_KEY: ci-test-secret-key-not-for-production-123456
+          DATABASE_URL: postgresql+asyncpg://workpilot:ci@127.0.0.1:5432/workpilot_ci
+          TEST_DATABASE_URL: postgresql+asyncpg://workpilot:ci@127.0.0.1:5432/workpilot_ci
+        run: |
+          if [ -f eval/fixtures/query_embeddings.json ]; then
+            uv run python scripts/experiments/run_retrieval_eval_ci.py
+          else
+            echo "fixtures missing — skip retrieval gate (build locally with Ollama)"
+          fi
 
   frontend-typecheck:
     runs-on: ubuntu-latest
