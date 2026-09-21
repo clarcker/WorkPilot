@@ -118,8 +118,50 @@ def _structured_bullets(dept_name: str, data: dict) -> str:
     return "\n".join(lines)
 
 
-async def _llm_summarize(bullets: str) -> str:
-    """LLM 只润色；失败则返回结构化原文，禁止编造数字。"""
+def _extract_numbers(text: str) -> list[str]:
+    import re
+    return re.findall(r"\d+(?:\.\d+)?", text or "")
+
+
+def summary_numbers_allowed(summary: str, data: dict) -> bool:
+    """
+    确定性兜底：摘要中出现的每个数字都必须存在于结构化数据的数字集合中。
+    否则视为模型编数，丢弃摘要。
+    """
+    allowed = {str(int(x)) for x in (
+        data.get("qa_total") or 0,
+        data.get("qa_down") or 0,
+        data.get("pending_reimb") or 0,
+        data.get("pending_reimb_over_48h") or 0,
+        data.get("pending_tickets") or 0,
+        data.get("pending_tickets_over_48h") or 0,
+        data.get("eval_run_id") or 0,
+    )}
+    for g in data.get("gaps") or []:
+        allowed.add(str(int(g.get("count") or 0)))
+    for raw in (
+        data.get("eval_doc_hit"),
+        data.get("eval_mrr"),
+    ):
+        if raw is None:
+            continue
+        allowed.add(f"{raw:.3f}")
+        allowed.add(f"{raw:.2f}")
+        allowed.add(str(raw))
+    # 日期里可能有年份，放行纯年份与 1-31 日
+    for n in _extract_numbers(summary):
+        if n in allowed:
+            continue
+        if len(n) == 4 and n.startswith(("202", "201")):  # 年份
+            continue
+        if n.isdigit() and 1 <= int(n) <= 31 and len(n) <= 2:
+            continue  # 日序/序号噪声
+        return False
+    return True
+
+
+async def _llm_summarize(bullets: str, data: dict) -> str:
+    """LLM 只润色；数字不在结构化数据中则回退原文。失败也回退。"""
     try:
         from services.llm_client import chat_complete
         prompt = (
@@ -132,7 +174,13 @@ async def _llm_summarize(bullets: str) -> str:
             max_tokens=300,
             user_role="super_admin",
         )
-        return out.strip() or bullets
+        out = (out or "").strip()
+        if not out:
+            return bullets
+        if not summary_numbers_allowed(out, data):
+            logger.warning("[daily_report] 摘要含数据外数字，丢弃 LLM 摘要，投递结构化原文")
+            return bullets
+        return out
     except Exception as exc:
         logger.warning(f"[daily_report] LLM 摘要失败，使用结构化原文: {exc}")
         return bullets
@@ -157,7 +205,7 @@ async def generate_department_report(dept: Department) -> int:
             return 0
 
     bullets = _structured_bullets(dept.dept_name, data)
-    summary = await _llm_summarize(bullets)
+    summary = await _llm_summarize(bullets, data)
     body = summary + "\n\n---\n数据明细\n" + bullets
     title = f"{dept.dept_name} 运营日报 {datetime.date.today().isoformat()}"
 

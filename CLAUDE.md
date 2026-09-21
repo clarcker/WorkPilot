@@ -31,7 +31,7 @@
 | 前端 | React + Ant Design Pro |
 | 部署 | Docker + Docker Compose（nginx / frontend / backend / postgres / ollama） |
 | SSH 采集 | Paramiko（运维模块） |
-| 定时任务 | APScheduler + PostgreSQLJobStore（防多 Worker 重复执行） |
+| 定时任务 | APScheduler + PostgreSQLJobStore + **进程级选主**（`pg_try_advisory_lock`）；JobStore 只持久化定义，不防多进程触发 |
 
 ---
 
@@ -85,7 +85,7 @@ uv add <package>               # 添加依赖
 
 1. **pgvector 替代独立向量库**：向量与结构化数据同 PostgreSQL 实例，权限过滤在同一 SQL 查询完成。
 2. **Embedding 模型唯一性**：文档向量化和查询向量化必须用同一个 Ollama Embedding 模型，切换模型时需重新向量化全部文档。
-3. **APScheduler 用 PostgreSQLJobStore**：Gunicorn 多 Worker 场景下防止定时任务重复执行。
+3. **定时任务单实例**：多 worker 下仅 `pg_try_advisory_lock` 选主成功的进程启动 APScheduler；JobStore 本身**不能**防止跨进程重复触发。非 leader 不跑 cleanup。
 4. **Nginx 关闭 proxy_buffering**：所有 `/api/*/stream` 路径必须关闭缓冲，`proxy_read_timeout` 设为 300s，保障 SSE 实时性。
 5. **仅 Nginx 端口对外**：postgres(5432)、backend(8000)、ollama(11434) 均不对宿主机暴露。
 

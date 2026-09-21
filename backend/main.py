@@ -67,25 +67,17 @@ async def lifespan(app: FastAPI):
         logger.error("[prompts] 加载失败（阻断启动）: {e}", e=exc)
         raise
 
-    # P2 APScheduler（PostgreSQLJobStore）
-    from services.scheduler import start_scheduler, stop_scheduler
+    # P2 调度：仅 advisory lock 选主成功的 worker 启动 APScheduler
+    # （JobStore 不防多进程重复触发；cleanup_loop 兜底已移除，避免 2N 执行者）
+    from services.scheduler import is_scheduler_leader, start_scheduler, stop_scheduler
     await start_scheduler()
-
-    # 保留 cleanup_loop 作为 scheduler 失败时的兜底（单 worker 有效）
-    from services.cleanup import cleanup_loop
-    stop_event = asyncio.Event()
-    cleanup_task = asyncio.create_task(cleanup_loop(stop_event))
+    if not is_scheduler_leader():
+        logger.info("[scheduler] 非 leader：本进程不执行定时 cleanup/日报")
 
     yield
 
     # 关闭
     stop_scheduler()
-    stop_event.set()
-    cleanup_task.cancel()
-    try:
-        await cleanup_task
-    except asyncio.CancelledError:
-        pass
     logger.info("WorkPilot v2 shutting down")
 
 

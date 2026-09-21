@@ -1,4 +1,10 @@
-"""P2：APScheduler + PostgreSQLJobStore，多 worker 只跑一次。"""
+"""P2：调度只在选主 worker 上启动。
+
+APScheduler 3.x 的 JobStore 只持久化 **job 定义**，每个进程的 scheduler
+会各自触发。多 worker 防重必须 **进程级选主**：
+启动时在专用连接上 `pg_try_advisory_lock`，锁随连接存活；仅 leader 启动
+scheduler。非 leader 不跑 cleanup_loop。
+"""
 from __future__ import annotations
 
 import asyncio
@@ -9,21 +15,33 @@ from core.logger import logger
 
 _scheduler = None
 _started = False
+_is_leader = False
+_lock_conn = None  # 专用 asyncpg 连接，持有 advisory lock
+_lock_hold_task: Optional[asyncio.Task] = None
+
+# 与 cleanup 共用同一常量，避免两套锁语义
+SCHEDULER_ADVISORY_LOCK_ID = 918273645
 
 
 def _sync_db_url() -> str:
     url = settings.database_url
-    return url.replace("postgresql+asyncpg://", "postgresql+psycopg2://").replace(
-        "+asyncpg", "+psycopg2"
-    ) if "asyncpg" in url else url
+    return url.replace("+asyncpg", "+psycopg2") if "asyncpg" in url else url
+
+
+def _asyncpg_dsn() -> str:
+    return settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
 
 
 def get_scheduler():
     return _scheduler
 
 
+def is_scheduler_leader() -> bool:
+    return _is_leader
+
+
 async def job_cleanup() -> None:
-    """模块级 job（SQLAlchemyJobStore 可序列化引用）。"""
+    """模块级 job（SQLAlchemyJobStore 可序列化引用）。仅 leader 会调度到。"""
     from services.cleanup import run_cleanup_once
     logger.info("[scheduler] job start | cleanup")
     try:
@@ -64,26 +82,65 @@ async def write_job_audit(job: str, detail: str) -> None:
         logger.warning(f"[scheduler] audit write failed: {exc}")
 
 
+async def _try_become_leader() -> bool:
+    """专用连接持有 advisory lock；成功返回 True。连接断开则锁自动释放。"""
+    global _lock_conn
+    try:
+        import asyncpg
+        dsn = _asyncpg_dsn()
+        conn = await asyncpg.connect(dsn, timeout=10)
+        got = await conn.fetchval(
+            "SELECT pg_try_advisory_lock($1)", SCHEDULER_ADVISORY_LOCK_ID
+        )
+        if not got:
+            await conn.close()
+            return False
+        _lock_conn = conn
+        return True
+    except Exception as exc:
+        logger.warning(f"[scheduler] 选主失败（不启动调度）: {type(exc).__name__}: {exc}")
+        return False
+
+
+async def _hold_leader_lock() -> None:
+    """保持连接；断开时本进程失去 leader（scheduler 继续跑但其他进程可抢锁）。"""
+    global _is_leader, _lock_conn
+    while _lock_conn is not None:
+        try:
+            # 周期 ping，连接挂掉则退出
+            await _lock_conn.fetchval("SELECT 1")
+        except Exception as exc:
+            logger.warning(f"[scheduler] leader 锁连接丢失: {exc}")
+            _is_leader = False
+            _lock_conn = None
+            return
+        await asyncio.sleep(30)
+
+
 async def start_scheduler() -> None:
-    """启动全局调度器。Job 函数必须在模块顶层，才能被 JobStore 序列化。"""
-    global _scheduler, _started
+    """
+    多 worker：仅 advisory lock 选主成功的进程启动 APScheduler。
+    非 leader **不**再跑 cleanup_loop，避免 2N 执行者。
+    """
+    global _scheduler, _started, _is_leader, _lock_hold_task
     if not settings.scheduler_enabled:
         logger.info("[scheduler] disabled by config")
         return
     if _started and _scheduler is not None:
         return
+
+    if not await _try_become_leader():
+        _is_leader = False
+        logger.info("[scheduler] 本 worker 非 leader，跳过调度与 cleanup")
+        return
+
+    _is_leader = True
     try:
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
         from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
         from apscheduler.triggers.cron import CronTrigger
-    except ImportError:
-        logger.warning("[scheduler] apscheduler 未安装，跳过定时任务")
-        return
 
-    try:
-        jobstores = {
-            "default": SQLAlchemyJobStore(url=_sync_db_url()),
-        }
+        jobstores = {"default": SQLAlchemyJobStore(url=_sync_db_url())}
         _scheduler = AsyncIOScheduler(jobstores=jobstores, timezone="UTC")
         _scheduler.add_job(
             "services.scheduler:job_cleanup",
@@ -103,20 +160,49 @@ async def start_scheduler() -> None:
         )
         _scheduler.start()
         _started = True
+        _lock_hold_task = asyncio.create_task(_hold_leader_lock())
         logger.info(
-            "[scheduler] started | jobs=cleanup,daily_report | report_hour={h}",
+            "[scheduler] leader 启动调度 | jobs=cleanup,daily_report | report_hour={h} | lock_id={lid}",
             h=settings.daily_report_hour,
+            lid=SCHEDULER_ADVISORY_LOCK_ID,
         )
     except Exception as exc:
         logger.error(f"[scheduler] 启动失败: {type(exc).__name__}: {exc}")
+        _is_leader = False
 
 
 def stop_scheduler() -> None:
-    global _scheduler, _started
+    global _scheduler, _started, _is_leader, _lock_conn, _lock_hold_task
+    if _lock_hold_task is not None:
+        _lock_hold_task.cancel()
+        _lock_hold_task = None
     if _scheduler is not None:
         try:
             _scheduler.shutdown(wait=False)
         except Exception:
             pass
+    if _lock_conn is not None:
+        try:
+            # 释放锁并关闭连接
+            asyncio.get_event_loop().create_task(_release_lock_async())
+        except Exception:
+            pass
     _scheduler = None
     _started = False
+    _is_leader = False
+
+
+async def _release_lock_async() -> None:
+    global _lock_conn
+    conn = _lock_conn
+    _lock_conn = None
+    if conn is None:
+        return
+    try:
+        await conn.execute("SELECT pg_advisory_unlock($1)", SCHEDULER_ADVISORY_LOCK_ID)
+    except Exception:
+        pass
+    try:
+        await conn.close()
+    except Exception:
+        pass

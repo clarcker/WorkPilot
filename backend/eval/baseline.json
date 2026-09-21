@@ -1,5 +1,8 @@
 {
-  "mrr": 0.60,
-  "doc_hit_at_3": 0.80,
-  "note": "检索层 CI 基线；有意提升时在 PR 中同步更新本文件"
+  "mrr": 0.6547,
+  "doc_hit_at_3": 0.8281,
+  "cases": 64,
+  "model": "nomic-embed-text",
+  "measured_at": "2026-09-21",
+  "note": "检索层 CI 基线（fixture embeddings，本地 DB seed 语料）；有意提升时在 PR 中同步更新本文件。门槛 = mrr - 0.02"
 }

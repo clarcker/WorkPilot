@@ -132,6 +132,57 @@ class TestPromptLoader:
         pl._load_all_cached.cache_clear()
 
 
+class TestChatStreamNoRetryAfterFirstToken:
+    def setup_method(self):
+        reset_circuits_for_tests()
+        from core.config import settings
+        settings.llm_provider = "ollama"
+        settings.llm_fallback_enabled = False
+        settings.llm_retry_max = 3
+        settings.llm_retry_base_delay = 0.01
+        settings.llm_max_concurrency_local = 4
+        settings.llm_queue_timeout = 5
+
+    @pytest.mark.asyncio
+    async def test_midstream_timeout_not_retried(self, monkeypatch):
+        """第 5 个 token 后 ReadTimeout：不得重新流前 5 个 token，异常上抛。"""
+        import services.llm_client as lc
+
+        calls = {"n": 0}
+        yielded: list[str] = []
+
+        async def fake_stream(provider, messages, temperature, max_tokens):
+            calls["n"] += 1
+            for i in range(5):
+                yield f"t{i}"
+            raise httpx.ReadTimeout("mid-stream")
+
+        monkeypatch.setattr(lc, "_stream_once", fake_stream)
+        monkeypatch.setattr(lc, "resolve_provider", lambda role=None: "ollama")
+
+        got_exc = None
+        with pytest.raises(httpx.ReadTimeout):
+            async for tok in lc.chat_stream([{"role": "user", "content": "hi"}]):
+                yielded.append(tok)
+        assert yielded == ["t0", "t1", "t2", "t3", "t4"]
+        assert calls["n"] == 1  # 不重试、不 fallback
+
+
+class TestDailyReportNumbers:
+    def test_reject_fabricated_number(self):
+        from services.daily_report import summary_numbers_allowed
+        data = {
+            "qa_total": 12, "qa_down": 2,
+            "pending_reimb": 3, "pending_reimb_over_48h": 0,
+            "pending_tickets": 1, "pending_tickets_over_48h": 0,
+            "gaps": [{"query": "x", "count": 2}],
+            "eval_run_id": 13, "eval_doc_hit": 0.844, "eval_mrr": 0.669,
+            "eval_alert": None,
+        }
+        assert summary_numbers_allowed("昨日问答 12 条，👎 2 条，待审批 3", data) is True
+        assert summary_numbers_allowed("昨日问答 99 条", data) is False
+
+
 class TestToolSchemaValidate:
     def test_enum_reject(self):
         schema = {

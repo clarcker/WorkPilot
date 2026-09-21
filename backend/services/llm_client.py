@@ -184,10 +184,10 @@ async def chat_stream(
 
         breaker.mark_probe()
         for attempt in range(max_try):
+            got_first = False  # 必须在 try 外，except 里才能看到
             try:
                 from services.llm_resilience import llm_slot
                 async with llm_slot(prov):
-                    got_first = False
                     async for token in _stream_once(prov, messages, temperature, max_tokens):
                         if not got_first:
                             breaker.on_success()
@@ -212,7 +212,12 @@ async def chat_stream(
                 raise
             except Exception as exc:
                 last_exc = exc
-                # 首 token 后失败：不重试，直接抛给上层
+                # P1：首 token 之后失败绝不重试（避免重复输出）；也不计入熔断
+                if got_first:
+                    logger.warning(
+                        f"[llm-stream] {prov} 首 token 后中断，不重试: {type(exc).__name__}"
+                    )
+                    raise
                 if not is_retryable_exc(exc):
                     breaker.on_failure()
                     meta["circuit_state"] = circuit_state(prov)

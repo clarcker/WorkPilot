@@ -12,15 +12,18 @@
 | 基础设施 + 场景 A–D + Q1–Q5 | ✅ | 见 git 历史 |
 | Q6 R5 重排 | ⏸ | 门控样本曾不足；扩组后待复跑 |
 | P1 LLM 可靠性 | ✅ 代码 | 重试/熔断/降级/并发 queued；单测通过；演练数字待填性能基线.md |
-| P2 APScheduler + PG JobStore | ✅ 代码 | cleanup + 每日日报；**Windows 用 `uvicorn --workers 4`**（gunicorn 依赖 `fcntl`，仅 Linux/Docker） |
+| P2 APScheduler + 选主 | ✅ 代码 | JobStore **不**防多进程；`pg_try_advisory_lock` 选主，仅 leader 启调度；cleanup_loop 兜底已移除 |
+| P6 CI 检索门控 | ✅ | fixture **已提交**（64 case）；baseline mrr=0.6547 / hit@3=0.8281；main 缺 fixture 直接红 |
+| P2 APScheduler + 选主 | ✅ 代码 | 详见上表 |
 | P3 压测 | ✅ 脚本 / ⬜ 数字 | `scripts/loadtest/chat_loadtest.py`；表格见性能基线.md |
 | P4 prompt 版本化 | ✅ | `backend/prompts/` + `prompt_set_version` 进 trace/eval_runs/diff |
 | P5 embedding 切换 | ✅ 接口 / ⬜ 来回切验收 | 同维度 reembed API；异维度拒绝 |
-| P6 CI | ✅ | unit + integration(pgvector) + 检索 eval fixture 门控（无 fixture 时 skip） |
+| P6 CI | ✅ fixture 已入库 | 见上表；main 缺文件则 CI 失败 |
 | P7 注入防御 | ✅ 代码 | sanitizer + 边界 prompt + schema 校验 + 对抗语料/case + 安全设计.md |
-| P8 演示 | ⬜ | README 已写默认外部 API 路径；GIF/公开 demo/干净 clone 待人工 |
-| P9 部门日报 | ✅ 代码 | SQL 汇总 + LLM 摘要 + notifications；连续 3 天数字一致性待跑 |
-| 门控/judge 复核数字 | ⬜ | Ollama 稳定后跑 gate_recheck + judge×2 |
+| P1 stream 首 token 后 | ✅ 已修 | `got_first` 外提，中途断流不重试/不计入熔断；单测锁定 |
+| P9 日报数字 | ✅ 已修 | `summary_numbers_allowed` 代码校验，编数则回退结构化原文 |
+| P8 演示 | ⬜ | GIF / 公开 demo / 干净 clone 待人工 |
+| 门控/judge 复核数字 | ⬜ | `run_gate_recheck` + judge×2；4 worker 选主演练待本机日志 |
 
 ---
 

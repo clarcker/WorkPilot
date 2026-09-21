@@ -13,6 +13,7 @@ __pycache__/
 *.pid
 backend/logs/
 backend/uploads/
+backend/scripts/logs/
 scripts_split_admin.py
 
 # 旧语料目录，已迁至 backend/seed_docs/

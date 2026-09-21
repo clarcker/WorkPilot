@@ -84,7 +84,11 @@ jobs:
           if [ -f eval/fixtures/query_embeddings.json ]; then
             uv run python scripts/experiments/run_retrieval_eval_ci.py
           else
-            echo "fixtures missing — skip retrieval gate (build locally with Ollama)"
+            echo "::warning::eval/fixtures/query_embeddings.json missing — run build_eval_fixtures.py with Ollama and commit"
+            if [ "${GITHUB_REF_NAME}" = "main" ] || [ "${GITHUB_REF_NAME}" = "master" ]; then
+              echo "::error::main 分支必须提交检索 fixture，否则 P6 门控无效"
+              exit 1
+            fi
           fi
 
   frontend-typecheck:
