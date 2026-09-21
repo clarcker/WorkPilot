@@ -32,6 +32,49 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://workpilot:ci@127.0.0.1:5432/workpilot_ci
         run: uv run pytest tests/unit -q --tb=line
 
+  backend-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: workpilot
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: workpilot_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workpilot -d workpilot_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --group test
+
+      - name: Enable pgvector + run integration tests
+        env:
+          ENVIRONMENT: test
+          JWT_SECRET_KEY: ci-test-secret-key-not-for-production-123456
+          DATABASE_URL: postgresql+asyncpg://workpilot:ci@127.0.0.1:5432/workpilot_ci
+          TEST_DATABASE_URL: postgresql+asyncpg://workpilot:ci@127.0.0.1:5432/workpilot_ci
+        run: |
+          # 依赖 Ollama/embedding 的用例由 conftest mock；跑与模型无关的鉴权/生命周期/API
+          uv run pytest tests/integration/test_doc_lifecycle_authz.py tests/integration/test_documents.py tests/integration/test_users.py tests/integration/test_departments.py -q --tb=line
+
   frontend-typecheck:
     runs-on: ubuntu-latest
     defaults:
