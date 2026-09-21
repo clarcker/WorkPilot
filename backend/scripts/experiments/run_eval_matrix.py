@@ -1,4 +1,4 @@
-"""
+﻿"""
 E4 检索策略对照：只调 retrieve()，不走 LLM / query_understand。
 
 指标：期望文档的 rank / doc_hit@3 / recall@1 / mrr
@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from dotenv import load_dotenv
 
 load_dotenv()

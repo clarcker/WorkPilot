@@ -1,4 +1,4 @@
-"""
+﻿"""
 场景 D 演示：同题不同答（权限过滤）
 
 同一问题「薪酬调整实施方案里写了什么 / 研发提测流程」：
@@ -17,7 +17,7 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from dotenv import load_dotenv
 
 load_dotenv()

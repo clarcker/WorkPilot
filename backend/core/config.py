@@ -106,6 +106,9 @@ class Settings(BaseSettings):
     retrieval_rrf_k: int = 60
     retrieval_w_vec: float = 0.7
     retrieval_w_kw: float = 0.3
+    # Q3 残留：小块检索、大块生成——命中 chunk 扩展为同 heading 整节
+    retrieval_parent_expand: bool = True
+    retrieval_parent_budget: int = 4000
 
     upload_dir: str = "/data/uploads"
     max_file_size_mb: int = 200

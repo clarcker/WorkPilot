@@ -1,4 +1,4 @@
-"""混合检索冒烟：纯向量 vs RRF（向量+关键词）。
+﻿"""混合检索冒烟：纯向量 vs RRF（向量+关键词）。
 
 用法：cd backend && uv run python scripts/smoke_hybrid.py
 """
@@ -9,7 +9,7 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from dotenv import load_dotenv
 
 load_dotenv()

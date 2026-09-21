@@ -1,4 +1,4 @@
-"""E5 三次对照：配额 on/off × 3 次（仅 retrieve，确定性 + 可见差异）。
+﻿"""E5 三次对照：配额 on/off × 3 次（仅 retrieve，确定性 + 可见差异）。
 
 用法：cd backend && uv run python scripts/run_quota_ab.py
 """
@@ -10,7 +10,7 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -22,11 +22,18 @@ from services.retriever import retrieve  # noqa: E402
 
 
 def _rank(sources: list[dict], expected: str) -> int:
+    """与 E2 一致：精确文件名优先，其次前缀（兼容带扩展名差异）。"""
     if not expected:
         return -1
     for i, s in enumerate(sources, 1):
         name = s.get("doc_name") or ""
-        if name == expected or expected in name:
+        if name == expected:
+            return i
+    for i, s in enumerate(sources, 1):
+        name = s.get("doc_name") or ""
+        if expected.endswith(".md") and name.startswith(expected[:-3]):
+            return i
+        if name.endswith(".md") and expected.startswith(name[:-3]):
             return i
     return -1
 
