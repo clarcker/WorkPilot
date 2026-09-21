@@ -492,6 +492,9 @@ Content-Type: multipart/form-data
 | `visibility` | string | 否 | 默认 `dept_only`，见下表 |
 | `category` | string | 否 | 自定义分类标签 |
 | `version` | string | 否 | 版本号（如 `v1.2`） |
+| `lifecycle` | string | 否 | 默认 `effective`；可传 `draft`（草案，仅管理员召回） |
+| `effective_date` | string | 否 | `YYYY-MM-DD` 生效日期 |
+| `supersedes_doc_id` | int | 否 | 作为新版本替代的旧文档 ID；提交后旧文档自动 `lifecycle=superseded` |
 
 **visibility 可选值**
 
@@ -501,6 +504,14 @@ Content-Type: multipart/form-data
 | `non_customer` | 非客服部门的所有成员 |
 | `dept_only` | 仅本部门成员 |
 | `specific_users` | 仅白名单内的指定人员（需配合 5.7/5.8 接口设置） |
+
+**lifecycle 可选值（业务生命周期，与 status 正交）**
+
+| 值 | 默认检索 | 说明 |
+|---|---|---|
+| `effective` | ✅ 所有角色 | 现行有效 |
+| `superseded` | ❌ | 已被新版替代；`time_scope=historical` 时员工/管理员可见 |
+| `draft` | ❌ 员工不可见 | 仅 `dept_admin` / `super_admin` 召回；员工提问不透露存在 |
 
 **响应** `201`（上传成功，后台异步处理）
 
@@ -513,6 +524,10 @@ Content-Type: multipart/form-data
     "dept_id": 2, "dept_name": "研发部",
     "visibility": "dept_only",
     "status": "processing",    // 上传后立即进入后台处理
+    "lifecycle": "effective",
+    "effective_date": "2026-01-01",
+    "supersedes_doc_id": 3,
+    "supersedes_name": "旧版手册.pdf",
     "error_message": null,
     "category": null, "version": null,
     "uploaded_by": 1, "uploaded_by_name": "管理员",
@@ -531,6 +546,13 @@ processing  →  ready     （解析 + 向量化成功，可被检索）
 ready / failed  →  archived  （归档 / 软删除，从检索结果消失）
 ```
 
+**文档 lifecycle（业务生命周期）**
+
+```
+effective  ⇄  superseded  ⇄  draft
+上传替代：新文档 supersedes_doc_id=旧文档 → 旧文档自动 superseded
+```
+
 ---
 
 ### 5.2 列出文档 `[管理员]`
@@ -545,6 +567,7 @@ GET /api/docs/
 |---|---|
 | `dept_id` | 按部门过滤（仅超管有效） |
 | `status` | `processing` / `ready` / `failed` |
+| `lifecycle` | `effective` / `superseded` / `draft` |
 | `keyword` | 按文件名模糊搜索 |
 
 默认不返回 `archived` 文档。
@@ -557,7 +580,17 @@ GET /api/docs/
 GET /api/docs/{doc_id}
 ```
 
-返回 `DocOut`，含 `chunk_count`（处理完成后非零）。
+返回 `DocOut`，含 `chunk_count`（处理完成后非零）、`lifecycle`、`effective_date`、`supersedes_name`、`superseded_by_name`。
+
+---
+
+### 5.3b 版本链 `[管理员]`
+
+```
+GET /api/docs/{doc_id}/version-chain
+```
+
+返回旧版 → 当前 → 新版列表，每项含 `id / file_name / lifecycle / effective_date / status / is_self`。
 
 ---
 
@@ -570,10 +603,16 @@ PATCH /api/docs/{doc_id}
 **请求体**（字段均可选）
 
 ```json
-{ "visibility": "global", "category": "制度文件", "version": "v2.0" }
+{
+  "visibility": "global",
+  "category": "制度文件",
+  "version": "v2.0",
+  "lifecycle": "superseded",
+  "effective_date": "2026-01-01"
+}
 ```
 
-已归档文档不可修改。
+生命周期变更写入 `audit_logs`（action=`doc.lifecycle_update`）。已归档文档不可修改。
 
 ---
 

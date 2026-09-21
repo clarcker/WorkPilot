@@ -20,6 +20,11 @@ class DocOut(BaseModel):
     dept_name:         str | None = None
     visibility:        str         # global / non_customer / dept_only / specific_users
     status:            str         # processing / ready / failed / archived
+    lifecycle:         str = "effective"   # effective / superseded / draft
+    effective_date:    str | None = None
+    supersedes_doc_id: int | None = None
+    supersedes_name:   str | None = None
+    superseded_by_name: str | None = None
     error_message:     str | None
     category:          str | None
     version:           str | None
@@ -44,6 +49,20 @@ class DocUpdate(BaseModel):
     )
     category:   str | None = Field(default=None, max_length=100)
     version:    str | None = Field(default=None, max_length=50)
+    lifecycle:  str | None = Field(
+        default=None,
+        description="effective | superseded | draft",
+    )
+    effective_date: str | None = Field(default=None, description="YYYY-MM-DD")
+
+
+class VersionChainItem(BaseModel):
+    id: int
+    file_name: str
+    lifecycle: str
+    effective_date: str | None = None
+    status: str
+    is_self: bool = False
 
 
 class DocPermissionSet(BaseModel):

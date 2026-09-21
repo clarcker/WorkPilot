@@ -44,6 +44,13 @@ class DocStatus(str, enum.Enum):
     archived   = "archived"
 
 
+class DocLifecycle(str, enum.Enum):
+    """业务生命周期：与 pipeline status 正交。"""
+    effective  = "effective"   # 现行有效
+    superseded = "superseded"  # 已被新版替代
+    draft      = "draft"       # 草案（仅管理员可见）
+
+
 class ConversationStatus(str, enum.Enum):
     active   = "active"
     archived = "archived"
@@ -166,6 +173,14 @@ class Document(Base):
         Enum(DocStatus, name="doc_status", values_callable=lambda x: [e.value for e in x]),
         nullable=False, default=DocStatus.processing
     )
+    lifecycle:    Mapped[DocLifecycle] = mapped_column(
+        Enum(DocLifecycle, name="doc_lifecycle", values_callable=lambda x: [e.value for e in x]),
+        nullable=False, default=DocLifecycle.effective
+    )
+    effective_date: Mapped[Optional[datetime.date]] = mapped_column(nullable=True)
+    supersedes_doc_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("documents.id", ondelete="SET NULL"), nullable=True
+    )
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     category:     Mapped[Optional[str]]  = mapped_column(String(100), nullable=True)
     version:      Mapped[Optional[str]]  = mapped_column(String(50),  nullable=True)
@@ -189,6 +204,8 @@ class Document(Base):
         Index("idx_documents_dept_id",    "dept_id"),
         Index("idx_documents_status",     "status"),
         Index("idx_documents_visibility", "visibility"),
+        Index("idx_documents_lifecycle",  "lifecycle"),
+        Index("idx_documents_supersedes", "supersedes_doc_id"),
     )
 
 
@@ -604,6 +621,16 @@ class EvalRun(Base):
     failed_cases:     Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     operator_id:      Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     note:             Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Q3 LLM-as-judge + 运行进度
+    judge_model:          Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    faithfulness_avg:     Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    points_coverage:      Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    hallucination_count:  Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    refusal_correct_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    label:                Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    mode:                 Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default="fast")
+    progress:             Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
+    status:               Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default="finished")
 
 
 # =============================================

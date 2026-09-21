@@ -32,6 +32,9 @@ export interface Source {
   page_no: number | null
   score: number
   chunk_text: string
+  lifecycle?: string
+  effective_date?: string | null
+  lifecycle_note?: string | null
 }
 
 export interface Message {

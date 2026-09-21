@@ -13,7 +13,8 @@ import {
 import { getStoredUser } from '../../hooks/useAuth'
 import {
   listDepts, listUsers, listDocs, uploadDoc, reindexDoc, archiveDoc, setDocPermissions,
-  type Dept, type AdminUser, type AdminDoc,
+  updateDoc, getDocVersionChain,
+  type Dept, type AdminUser, type AdminDoc, type VersionChainItem,
 } from '../../api/admin'
 
 const { Text, Title } = Typography
@@ -31,6 +32,11 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   failed:     { label: '处理失败', color: 'error' },
   archived:   { label: '已归档', color: 'default' },
 }
+const LIFECYCLE_LABELS: Record<string, { label: string; color: string }> = {
+  effective:  { label: '现行',   color: 'green' },
+  superseded: { label: '已替代', color: 'orange' },
+  draft:      { label: '草案',   color: 'purple' },
+}
 
 export default function DocumentsTab() {
   const currentUser = getStoredUser()
@@ -39,6 +45,7 @@ export default function DocumentsTab() {
   const [docs, setDocs]         = useState<AdminDoc[]>([])
   const [total, setTotal]       = useState(0)
   const [page, setPage]         = useState(1)
+  const [lifecycleFilter, setLifecycleFilter] = useState<string | undefined>(undefined)
   const [loading, setLoading]   = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [depts, setDepts]       = useState<Dept[]>([])
@@ -47,17 +54,19 @@ export default function DocumentsTab() {
   const [uploadForm] = Form.useForm()
   const [fileList, setFileList] = useState<File[]>([])
   const [uploading, setUploading] = useState(false)
+  const [chainDoc, setChainDoc] = useState<AdminDoc | null>(null)
+  const [chainItems, setChainItems] = useState<VersionChainItem[]>([])
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const load = useCallback(async (p = page) => {
+  const load = useCallback(async (p = page, life = lifecycleFilter) => {
     setLoading(true)
     try {
-      const res = await listDocs({ page: p, page_size: 20 })
+      const res = await listDocs({ page: p, page_size: 20, lifecycle: life || undefined })
       setDocs(res.items)
       setTotal(res.total)
     } catch { antMsg.error('加载文档列表失败') }
     finally { setLoading(false) }
-  }, [page])
+  }, [page, lifecycleFilter])
 
   useEffect(() => { load() }, [load])
   useEffect(() => { if (isSuperAdmin) listDepts().then(setDepts).catch(() => {}) }, [isSuperAdmin])
@@ -107,6 +116,9 @@ export default function DocumentsTab() {
     fd.append('visibility', vals.visibility || 'dept_only')
     if (vals.category) fd.append('category', vals.category)
     if (vals.version)  fd.append('version',  vals.version)
+    fd.append('lifecycle', vals.lifecycle || 'effective')
+    if (vals.effective_date) fd.append('effective_date', vals.effective_date)
+    if (vals.supersedes_doc_id) fd.append('supersedes_doc_id', String(vals.supersedes_doc_id))
 
     setUploading(true)
     try {
@@ -137,24 +149,52 @@ export default function DocumentsTab() {
     catch { antMsg.error('操作失败') }
   }
 
+  async function handleChangeLifecycle(doc: AdminDoc, next: string) {
+    try {
+      await updateDoc(doc.id, { lifecycle: next })
+      antMsg.success(`已切换为 ${LIFECYCLE_LABELS[next]?.label || next}`)
+      load()
+    } catch { antMsg.error('生命周期更新失败') }
+  }
+
+  async function handleShowChain(doc: AdminDoc) {
+    try {
+      const items = await getDocVersionChain(doc.id)
+      setChainItems(items)
+      setChainDoc(doc)
+    } catch { antMsg.error('加载版本链失败') }
+  }
+
   const cols = [
     { title: '文件名', dataIndex: 'file_name', key: 'file_name', ellipsis: true,
       render: (v: string, d: AdminDoc) => (
         <Space direction="vertical" size={0}>
-          <Text ellipsis style={{ maxWidth: 220 }}>{v}</Text>
+          <Text ellipsis style={{ maxWidth: 200 }}>{v}</Text>
           {d.category && <Text type="secondary" style={{ fontSize: 11 }}>{d.category}</Text>}
         </Space>
       ) },
     { title: '类型', dataIndex: 'file_type', key: 'file_type', width: 70,
       render: (v: string) => <Tag>{v.toUpperCase()}</Tag> },
-    { title: '所属部门', dataIndex: 'dept_name', key: 'dept_name', width: 120,
+    { title: '所属部门', dataIndex: 'dept_name', key: 'dept_name', width: 110,
       render: (v: string | null) => v ?? <Text type="secondary">—</Text> },
-    { title: '可见范围', dataIndex: 'visibility', key: 'visibility', width: 110,
+    { title: '可见范围', dataIndex: 'visibility', key: 'visibility', width: 100,
       render: (v: string) => {
         const info = VISIBILITY_LABELS[v] ?? { label: v, color: 'default' }
         return <Tag color={info.color}>{info.label}</Tag>
       } },
-    { title: '状态', dataIndex: 'status', key: 'status', width: 100,
+    { title: '生命周期', dataIndex: 'lifecycle', key: 'lifecycle', width: 90,
+      render: (v: string, d: AdminDoc) => {
+        const info = LIFECYCLE_LABELS[v] ?? { label: v || '现行', color: 'green' }
+        return (
+          <Space direction="vertical" size={0}>
+            <Tag color={info.color}>{info.label}</Tag>
+            {d.effective_date && (
+              <Text type="secondary" style={{ fontSize: 11 }}>{d.effective_date}</Text>
+            )}
+          </Space>
+        )
+      } },
+    { title: '状态', dataIndex: 'status', key: 'status', width: 90,
       render: (v: string, d: AdminDoc) => {
         const info = STATUS_LABELS[v] ?? { label: v, color: 'default' }
         return (
@@ -163,16 +203,24 @@ export default function DocumentsTab() {
           </Tooltip>
         )
       } },
-    { title: 'Chunks', dataIndex: 'chunk_count', key: 'chunk_count', width: 80,
+    { title: 'Chunks', dataIndex: 'chunk_count', key: 'chunk_count', width: 70,
       render: (v: number | null) => v ?? '—' },
-    { title: '上传者', dataIndex: 'uploaded_by_name', key: 'uploaded_by_name', width: 100,
+    { title: '上传者', dataIndex: 'uploaded_by_name', key: 'uploaded_by_name', width: 90,
       render: (v: string | null) => v ?? '—' },
-    { title: '上传时间', dataIndex: 'created_at', key: 'created_at', width: 150,
+    { title: '上传时间', dataIndex: 'created_at', key: 'created_at', width: 140,
       render: (v: string) => new Date(v).toLocaleString('zh-CN') },
     {
-      title: '操作', key: 'action', width: 120,
+      title: '操作', key: 'action', width: 180,
       render: (_: unknown, doc: AdminDoc) => (
-        <Space size={4}>
+        <Space size={4} wrap>
+          <Select
+            size="small"
+            style={{ width: 88 }}
+            value={doc.lifecycle || 'effective'}
+            onChange={(v) => handleChangeLifecycle(doc, v)}
+            options={Object.entries(LIFECYCLE_LABELS).map(([k, v]) => ({ value: k, label: v.label }))}
+          />
+          <Button size="small" onClick={() => handleShowChain(doc)}>版本链</Button>
           {doc.status === 'failed' && (
             <Tooltip title="重新索引">
               <Button size="small" icon={<SyncOutlined />} onClick={() => handleReindex(doc)} />
@@ -194,8 +242,22 @@ export default function DocumentsTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Title level={5} style={{ margin: 0 }}>文档管理</Title>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
+        <Space>
+          <Title level={5} style={{ margin: 0 }}>文档管理</Title>
+          <Select
+            allowClear
+            placeholder="生命周期"
+            style={{ width: 120 }}
+            value={lifecycleFilter}
+            onChange={(v) => { setLifecycleFilter(v); setPage(1); load(1, v) }}
+            options={[
+              { value: 'effective', label: '现行' },
+              { value: 'superseded', label: '已替代' },
+              { value: 'draft', label: '草案' },
+            ]}
+          />
+        </Space>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => { setFileList([]); uploadForm.resetFields(); setUploadOpen(true) }}>
           上传文档
         </Button>
@@ -261,6 +323,28 @@ export default function DocumentsTab() {
             </Form.Item>
           )}
 
+          <Form.Item name="lifecycle" label="生命周期" initialValue="effective">
+            <Select
+              options={[
+                { value: 'effective', label: '现行' },
+                { value: 'draft', label: '草案（仅管理员可见）' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="effective_date" label="生效日期（选填）">
+            <Input placeholder="YYYY-MM-DD" />
+          </Form.Item>
+          <Form.Item name="supersedes_doc_id" label="作为新版本替代（选填）">
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder="选择被替代的旧文档"
+              options={docs
+                .filter(d => (d.lifecycle || 'effective') !== 'superseded')
+                .map(d => ({ value: d.id, label: `${d.file_name}${d.effective_date ? ` (${d.effective_date})` : ''}` }))}
+            />
+          </Form.Item>
           <Form.Item name="category" label="分类（选填）">
             <Input placeholder="如：行政制度 / 财务规范 / HR 政策" />
           </Form.Item>
@@ -268,6 +352,31 @@ export default function DocumentsTab() {
             <Input placeholder="如：v2.1" />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title={`版本链：${chainDoc?.file_name || ''}`}
+        open={!!chainDoc}
+        onCancel={() => { setChainDoc(null); setChainItems([]) }}
+        footer={null}
+        width={520}
+      >
+        {chainItems.map((item) => (
+          <div key={item.id} style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
+            <Space>
+              {item.is_self && <Tag color="blue">当前</Tag>}
+              <Text strong={item.is_self}>{item.file_name}</Text>
+              <Tag color={LIFECYCLE_LABELS[item.lifecycle]?.color || 'default'}>
+                {LIFECYCLE_LABELS[item.lifecycle]?.label || item.lifecycle}
+              </Tag>
+              {item.effective_date && <Text type="secondary">{item.effective_date}</Text>}
+              <Text type="secondary">#{item.id}</Text>
+            </Space>
+          </div>
+        ))}
+        {chainItems.length <= 1 && (
+          <Text type="secondary">该文档暂无上下游版本。</Text>
+        )}
       </Modal>
     </div>
   )

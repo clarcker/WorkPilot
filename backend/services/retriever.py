@@ -32,6 +32,29 @@ class RetrievedChunk(TypedDict):
     score:    float
     vec_score: float | None
     kw_rank:  int | None
+    lifecycle: str | None
+    effective_date: str | None
+    superseded_by_name: str | None
+    lifecycle_note: str | None
+
+
+def build_lifecycle_clause(user_role: str, time_scope: str = "current") -> str:
+    """
+    Q1：按角色 + 时间范围过滤 documents.lifecycle。
+
+    - current（默认）：员工仅 effective；管理员 effective + draft
+    - historical：effective + superseded；管理员额外 draft
+    draft 对员工不召回且不透露存在（与权限过滤同一原则）。
+    """
+    is_admin = user_role in ("super_admin", "dept_admin")
+    historical = (time_scope or "current") == "historical"
+    if historical:
+        if is_admin:
+            return "d.lifecycle IN ('effective', 'superseded', 'draft')"
+        return "d.lifecycle IN ('effective', 'superseded')"
+    if is_admin:
+        return "d.lifecycle IN ('effective', 'draft')"
+    return "d.lifecycle = 'effective'"
 
 
 def _candidate_k(top_k: int) -> int:
@@ -109,12 +132,13 @@ async def _vector_search(
     db,
     vec_str: str,
     vis_clause: str,
+    lifecycle_clause: str,
     user_id: int,
     user_dept_id: int | None,
     cand_k: int,
     min_score: float,
 ) -> list[dict]:
-    """候选扩展 → 阈值 → 与 top_k 解耦的 SQL 过滤（R2）。"""
+    """候选扩展 → 阈值 → 与 top_k 解耦的 SQL 过滤（R2 + Q1 lifecycle）。"""
     await _set_hnsw_params(db, cand_k)
 
     sql = text(f"""
@@ -122,11 +146,18 @@ async def _vector_search(
             SELECT
                 dc.id AS chunk_id, dc.doc_id, dc.content, dc.heading,
                 dc.page_no, dc.chunk_index, d.file_name,
+                d.lifecycle, d.effective_date,
+                newer.file_name AS superseded_by_name,
                 1 - (e.embedding <=> CAST(:query_vec AS vector)) AS score
             FROM embeddings e
             JOIN doc_chunks dc ON dc.id = e.chunk_id
             JOIN documents  d  ON d.id  = e.doc_id
-            WHERE d.status = 'ready' AND ({vis_clause})
+            LEFT JOIN documents newer
+              ON newer.supersedes_doc_id = d.id
+             AND newer.lifecycle = 'effective'
+            WHERE d.status = 'ready'
+              AND ({vis_clause})
+              AND ({lifecycle_clause})
             ORDER BY e.embedding <=> CAST(:query_vec AS vector)
             LIMIT :candidate_k
         ) candidates
@@ -149,6 +180,7 @@ async def _keyword_search(
     db,
     query_text: str,
     vis_clause: str,
+    lifecycle_clause: str,
     user_id: int,
     user_dept_id: int | None,
     cand_k: int,
@@ -162,11 +194,17 @@ async def _keyword_search(
             SELECT
                 dc.id AS chunk_id, dc.doc_id, dc.content, dc.heading,
                 dc.page_no, dc.chunk_index, d.file_name,
+                d.lifecycle, d.effective_date,
+                newer.file_name AS superseded_by_name,
                 ts_rank_cd(dc.content_tsv, to_tsquery('simple', :tsq)) AS rank
             FROM doc_chunks dc
             JOIN documents d ON d.id = dc.doc_id
+            LEFT JOIN documents newer
+              ON newer.supersedes_doc_id = d.id
+             AND newer.lifecycle = 'effective'
             WHERE d.status = 'ready'
               AND ({vis_clause})
+              AND ({lifecycle_clause})
               AND dc.content_tsv @@ to_tsquery('simple', :tsq)
             ORDER BY rank DESC
             LIMIT :candidate_k
@@ -262,6 +300,16 @@ async def _merge_chunks(
             if clen > 400:
                 continue
         total += clen
+        lifecycle = m.get("lifecycle") or "effective"
+        superseded_by = m.get("superseded_by_name")
+        note = None
+        if lifecycle == "superseded":
+            if superseded_by:
+                note = f"已被 {superseded_by} 替代（历史版本）"
+            else:
+                note = "历史版本，可能已有现行制度"
+        elif lifecycle == "draft":
+            note = "草案 / 征求意见稿，尚未正式生效"
         result.append(RetrievedChunk(
             chunk_id=m["chunk_id"],
             doc_id=m["doc_id"],
@@ -273,6 +321,14 @@ async def _merge_chunks(
             score=float(m.get("score") or 0),
             vec_score=m.get("vec_score"),
             kw_rank=m.get("kw_rank"),
+            lifecycle=lifecycle,
+            effective_date=(
+                m.get("effective_date").isoformat()
+                if hasattr(m.get("effective_date"), "isoformat")
+                else m.get("effective_date")
+            ),
+            superseded_by_name=superseded_by,
+            lifecycle_note=note,
         ))
         if len(result) >= 12:
             break
@@ -324,6 +380,72 @@ async def _fetch_neighbors(db, doc_id: int, chunk_index: int) -> tuple[list[str]
     return prev, next_
 
 
+async def _expand_parent_sections(
+    db,
+    hits: list[dict],
+    budget: int | None = None,
+) -> list[dict]:
+    """
+    小块检索、大块生成：把命中 chunk 替换为同 (doc_id, heading) 的整节内容。
+    无 heading 的 chunk 保持原样。整节超 budget 时保留原 chunk。
+    """
+    if not settings.retrieval_parent_expand:
+        return hits
+    budget = budget if budget is not None else settings.retrieval_parent_budget
+    if not hits:
+        return hits
+
+    section_keys = []
+    seen = set()
+    for h in hits:
+        heading = h.get("heading")
+        doc_id = h.get("doc_id")
+        if not heading or doc_id is None:
+            continue
+        key = (doc_id, heading)
+        if key not in seen:
+            seen.add(key)
+            section_keys.append(key)
+    if not section_keys:
+        return hits
+
+    section_map: dict[tuple[int, str], list[dict]] = {k: [] for k in section_keys}
+    # 按 heading 批量取同节 chunk
+    for doc_id, heading in section_keys:
+        rows = (
+            await db.execute(
+                select(DocChunk.chunk_index, DocChunk.content, DocChunk.heading, DocChunk.page_no)
+                .where(DocChunk.doc_id == doc_id, DocChunk.heading == heading)
+                .order_by(DocChunk.chunk_index.asc())
+            )
+        ).all()
+        section_map[(doc_id, heading)] = [
+            {"chunk_index": r[0], "content": r[1], "heading": r[2], "page_no": r[3]}
+            for r in rows
+        ]
+
+    expanded: list[dict] = []
+    used_sections: set[tuple[int, str]] = set()
+    for h in hits:
+        heading = h.get("heading")
+        key = (h.get("doc_id"), heading)
+        if heading and key in section_map and key not in used_sections:
+            section_rows = section_map[key]
+            section_text = "\n".join(r["content"] for r in section_rows).strip()
+            if section_text and len(section_text) <= budget:
+                used_sections.add(key)
+                expanded.append({
+                    **h,
+                    "content": section_text,
+                    "chunk_index": section_rows[0]["chunk_index"],
+                    "parent_expanded": True,
+                    "section_chunk_count": len(section_rows),
+                })
+                continue
+        expanded.append(h)
+    return expanded
+
+
 async def retrieve(
     query_embedding: list[float],
     user_id: int,
@@ -332,6 +454,7 @@ async def retrieve(
     query_text: str = "",
     top_k: int | None = None,
     min_score: float | None = None,
+    time_scope: str = "current",
 ) -> list[RetrievedChunk]:
     """混合检索入口。query_text 为空时退化为纯向量。"""
     from core.config import maybe_reload_settings
@@ -347,14 +470,17 @@ async def retrieve(
         )
         cs_dept_ids: list[int] = cs_config if isinstance(cs_config, list) else []
         vis_clause = _build_vis_clause(user_role, user_dept_id, user_id, cs_dept_ids)
+        lifecycle_clause = build_lifecycle_clause(user_role, time_scope)
 
         vec_rows = await _vector_search(
-            db, vec_str, vis_clause, user_id, user_dept_id, cand_k, min_score
+            db, vec_str, vis_clause, lifecycle_clause,
+            user_id, user_dept_id, cand_k, min_score,
         )
         kw_rows: list[dict] = []
         if query_text and settings.retrieval_enable_fts:
             kw_rows = await _keyword_search(
-                db, query_text, vis_clause, user_id, user_dept_id, cand_k
+                db, query_text, vis_clause, lifecycle_clause,
+                user_id, user_dept_id, cand_k,
             )
 
         vec_ids = [r["chunk_id"] for r in vec_rows]
@@ -415,9 +541,63 @@ async def retrieve(
                     m["pinned"] = False
 
         chunks = await _merge_chunks(db, ordered[: max(top_k * 4, 20)])
+        # 父块扩展：在 merge 之后、返回之前，用整节替换命中小块
+        meta_by_cid = {m.get("chunk_id"): m for m in ordered}
+        hit_dicts = []
+        for c in chunks:
+            d = dict(c)
+            src = meta_by_cid.get(c.get("chunk_id")) or {}
+            d.setdefault("heading", c.get("heading"))
+            d.setdefault("doc_id", c.get("doc_id"))
+            d["rrf_score"] = src.get("rrf_score") or c.get("score")
+            hit_dicts.append(d)
+        # 用 ordered 的 meta 信息补全 lifecycle 等
+        for d in hit_dicts:
+            src = meta_by_cid.get(d.get("chunk_id")) or {}
+            for k in ("lifecycle", "effective_date", "superseded_by_name", "file_name"):
+                if k in src and src[k] is not None:
+                    d.setdefault(k, src[k])
+        expanded_hits = await _expand_parent_sections(db, hit_dicts)
+        # 重新压回 RetrievedChunk（保留 merge 后的 score 等）
+        chunk_by_id = {c["chunk_id"]: c for c in chunks}
+        final_chunks: list[RetrievedChunk] = []
+        for h in expanded_hits:
+            base = chunk_by_id.get(h.get("chunk_id")) or h
+            lifecycle = h.get("lifecycle") or base.get("lifecycle") or "effective"
+            superseded_by = h.get("superseded_by_name") or base.get("superseded_by_name")
+            note = None
+            if lifecycle == "superseded":
+                note = (
+                    f"已被 {superseded_by} 替代（历史版本）"
+                    if superseded_by else "历史版本，可能已有现行制度"
+                )
+            elif lifecycle == "draft":
+                note = "草案 / 征求意见稿，尚未正式生效"
+            eff = h.get("effective_date") or base.get("effective_date")
+            if hasattr(eff, "isoformat"):
+                eff = eff.isoformat()
+            final_chunks.append(RetrievedChunk(
+                chunk_id=base.get("chunk_id") or h.get("chunk_id"),
+                doc_id=h.get("doc_id") or base.get("doc_id"),
+                doc_name=h.get("file_name") or base.get("doc_name") or "",
+                content=h.get("content") or base.get("content") or "",
+                heading=h.get("heading") or base.get("heading"),
+                page_no=h.get("page_no") or base.get("page_no"),
+                chunk_index=h.get("chunk_index") if h.get("chunk_index") is not None else base.get("chunk_index") or 0,
+                score=float(base.get("score") or 0),
+                vec_score=base.get("vec_score"),
+                kw_rank=base.get("kw_rank"),
+                lifecycle=lifecycle,
+                effective_date=eff,
+                superseded_by_name=superseded_by,
+                lifecycle_note=note,
+            ))
+            if len(final_chunks) >= 12:
+                break
+        chunks = final_chunks
 
     logger.debug(
-        f"[retriever] user={user_id} vec={len(vec_rows)} kw={len(kw_rows)} "
+        f"[retriever] user={user_id} scope={time_scope} vec={len(vec_rows)} kw={len(kw_rows)} "
         f"merged={len(chunks)} kw_quota={kw_quota} "
         f"out={[c['chunk_id'] for c in chunks[:5]]}"
     )

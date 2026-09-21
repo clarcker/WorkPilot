@@ -1,10 +1,11 @@
 """
 文档管理路由。
 
-POST   /api/docs/upload              上传文档（触发后台处理流水线）
-GET    /api/docs                     列出文档（分页 + 过滤）
-GET    /api/docs/{id}                文档详情（含分块数量）
-PATCH  /api/docs/{id}                修改元数据（visibility / category / version）
+POST   /api/docs/upload              上传文档（触发后台处理流水线；可指定 lifecycle / supersedes_doc_id）
+GET    /api/docs                     列出文档（分页 + 过滤 status/lifecycle）
+GET    /api/docs/{id}                文档详情（含分块数量与版本链名称）
+GET    /api/docs/{id}/version-chain  版本链（旧版 → 当前 → 新版）
+PATCH  /api/docs/{id}                修改元数据（visibility / category / version / lifecycle / effective_date）
 DELETE /api/docs/{id}                归档（软删除，status = archived）
 POST   /api/docs/{id}/reindex        重新触发向量化流水线
 GET    /api/docs/{id}/permissions    获取指定人员白名单（specific_users 模式）
@@ -43,6 +44,7 @@ from core.logger import logger
 from db.models import (
     Department,
     DocChunk,
+    DocLifecycle,
     DocPermission,
     DocStatus,
     DocVisibility,
@@ -52,7 +54,7 @@ from db.models import (
 )
 from db.session import get_db
 from schemas.common import BaseResp, PagedData
-from schemas.documents import DocOut, DocPermissionSet, DocUpdate, PermissionMember
+from schemas.documents import DocOut, DocPermissionSet, DocUpdate, PermissionMember, VersionChainItem
 from services.document_pipeline import run_pipeline
 
 router = APIRouter()
@@ -96,7 +98,32 @@ def _check_doc_scope(actor: User, doc: Document) -> None:
         )
 
 
-def _doc_to_out(doc: Document, chunk_count: int | None = None) -> DocOut:
+def _check_supersedes_scope(actor: User, old_doc: Document) -> None:
+    """
+    版本替代权限：dept_admin 只能替代本部门文档，且不能下架 global 全体共享制度。
+    super_admin 可替代任意未归档文档。
+    防止跨部门把别人的制度标成 superseded 从而退出默认召回。
+    """
+    if actor.role == UserRole.super_admin:
+        return
+    if old_doc.dept_id != actor.dept_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": 40302, "message": "无权替代其他部门的文档"},
+        )
+    if old_doc.visibility == DocVisibility.global_:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": 40303, "message": "dept_admin 不可替代全体共享文档，请联系超级管理员"},
+        )
+
+
+def _doc_to_out(
+    doc: Document,
+    chunk_count: int | None = None,
+    supersedes_name: str | None = None,
+    superseded_by_name: str | None = None,
+) -> DocOut:
     dept_name = doc.department.dept_name if doc.department else None
     uploader_name = doc.uploaded_by_user.real_name if doc.uploaded_by_user else None
     return DocOut(
@@ -109,6 +136,11 @@ def _doc_to_out(doc: Document, chunk_count: int | None = None) -> DocOut:
         dept_name=dept_name,
         visibility=doc.visibility.value,
         status=doc.status.value,
+        lifecycle=doc.lifecycle.value if doc.lifecycle else "effective",
+        effective_date=doc.effective_date.isoformat() if doc.effective_date else None,
+        supersedes_doc_id=doc.supersedes_doc_id,
+        supersedes_name=supersedes_name,
+        superseded_by_name=superseded_by_name,
         error_message=doc.error_message,
         category=doc.category,
         version=doc.version,
@@ -118,6 +150,23 @@ def _doc_to_out(doc: Document, chunk_count: int | None = None) -> DocOut:
         updated_at=doc.updated_at,
         chunk_count=chunk_count,
     )
+
+
+async def _doc_chain_names(db: AsyncSession, doc: Document) -> tuple[str | None, str | None]:
+    supersedes_name = None
+    superseded_by_name = None
+    if doc.supersedes_doc_id:
+        old = await db.get(Document, doc.supersedes_doc_id)
+        supersedes_name = old.file_name if old else None
+    newer = await db.scalar(
+        select(Document).where(
+            Document.supersedes_doc_id == doc.id,
+            Document.lifecycle == DocLifecycle.effective,
+        ).limit(1)
+    )
+    if newer:
+        superseded_by_name = newer.file_name
+    return supersedes_name, superseded_by_name
 
 
 # ------------------------------------------------------------------
@@ -133,6 +182,9 @@ async def upload_document(
     visibility: str = Form(default="dept_only"),
     category: str | None = Form(default=None),
     version:  str | None = Form(default=None),
+    lifecycle: str = Form(default="effective", description="effective | draft"),
+    effective_date: str | None = Form(default=None, description="YYYY-MM-DD"),
+    supersedes_doc_id: int | None = Form(default=None, description="作为新版本替代的旧文档 ID"),
     current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -178,6 +230,48 @@ async def upload_document(
             detail={"code": 42200, "message": f"无效 visibility 值：{visibility}"},
         )
 
+    # ---- 校验 lifecycle / 版本链 ----
+    try:
+        life = DocLifecycle(lifecycle)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": 42200, "message": f"无效 lifecycle 值：{lifecycle}"},
+        )
+    if life == DocLifecycle.superseded and not supersedes_doc_id:
+        # 上传时一般不允许直接标 superseded；替代流程由 supersedes_doc_id 触发
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": 42200, "message": "上传时请通过 supersedes_doc_id 建立版本链，勿直接指定 superseded"},
+        )
+
+    old_doc: Document | None = None
+    if supersedes_doc_id is not None:
+        old_doc = await db.get(Document, supersedes_doc_id)
+        if not old_doc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": 40400, "message": "被替代文档不存在"},
+            )
+        if old_doc.status == DocStatus.archived:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": 40000, "message": "已归档文档不可作为替代目标"},
+            )
+        # 跨部门 / global 下架防护
+        _check_supersedes_scope(current_user, old_doc)
+
+    eff_date = None
+    if effective_date:
+        import datetime as _dt
+        try:
+            eff_date = _dt.date.fromisoformat(effective_date.strip())
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"code": 42200, "message": "effective_date 格式应为 YYYY-MM-DD"},
+            )
+
     # ---- 保存文件到磁盘 ----
     file_uuid = str(uuid.uuid4())
     save_dir = Path(settings.upload_dir) / str(target_dept_id)
@@ -207,12 +301,31 @@ async def upload_document(
         dept_id=target_dept_id,
         visibility=vis,
         status=DocStatus.processing,
+        lifecycle=life,
+        effective_date=eff_date,
+        supersedes_doc_id=old_doc.id if old_doc else None,
         category=category,
         version=version,
         uploaded_by=current_user.id,
     )
     db.add(doc)
     await db.flush()
+
+    # 替代流程：旧文档 → superseded（chunk/embedding 保留，不参与默认召回）
+    if old_doc is not None and old_doc.lifecycle != DocLifecycle.superseded:
+        old_life = old_doc.lifecycle.value
+        old_doc.lifecycle = DocLifecycle.superseded
+        await write_audit(
+            db,
+            operator_id=current_user.id,
+            operator_name=current_user.real_name,
+            action=AuditAction.DOC_LIFECYCLE,
+            resource_type="document",
+            resource_id=str(old_doc.id),
+            old_value={"lifecycle": old_life},
+            new_value={"lifecycle": "superseded", "superseded_by": doc.id},
+            ip_address=_get_ip(request),
+        )
 
     # 加载关联用于响应
     await db.refresh(doc, attribute_names=["department", "uploaded_by_user"])
@@ -229,6 +342,8 @@ async def upload_document(
             "file_size": doc.file_size,
             "dept_id": doc.dept_id,
             "visibility": doc.visibility.value,
+            "lifecycle": doc.lifecycle.value,
+            "supersedes_doc_id": doc.supersedes_doc_id,
         },
         ip_address=_get_ip(request),
     )
@@ -239,9 +354,13 @@ async def upload_document(
     doc_id = doc.id
     background_tasks.add_task(run_pipeline, doc_id)
 
-    logger.info("Document uploaded | doc_id={doc_id} | file={filename} | by={operator}", doc_id=doc.id, filename=doc.file_name, operator=current_user.username)
+    logger.info("Document uploaded | doc_id={doc_id} | file={filename} | by={operator}", doc_id=doc.id, file_name=doc.file_name, operator=current_user.username)
 
-    return BaseResp.ok(_doc_to_out(doc), message="文件上传成功，正在后台处理")
+    supersedes_name = old_doc.file_name if old_doc else None
+    return BaseResp.ok(
+        _doc_to_out(doc, supersedes_name=supersedes_name),
+        message="文件上传成功，正在后台处理",
+    )
 
 
 # ------------------------------------------------------------------
@@ -254,6 +373,7 @@ async def list_documents(
     page_size:  int        = Query(default=20,   ge=1, le=100),
     dept_id:    int | None = Query(default=None),
     status_:    str | None = Query(default=None, alias="status"),
+    lifecycle:  str | None = Query(default=None),
     keyword:    str | None = Query(default=None, max_length=100),
     current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -272,6 +392,15 @@ async def list_documents(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={"code": 42200, "message": f"无效 status 值：{status_}"},
+            )
+
+    if lifecycle:
+        try:
+            conditions.append(Document.lifecycle == DocLifecycle(lifecycle))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"code": 42200, "message": f"无效 lifecycle 值：{lifecycle}"},
             )
 
     if keyword:
@@ -299,9 +428,14 @@ async def list_documents(
     rows = await db.execute(data_stmt)
     docs = rows.scalars().all()
 
+    items = []
+    for d in docs:
+        s_name, b_name = await _doc_chain_names(db, d)
+        items.append(_doc_to_out(d, supersedes_name=s_name, superseded_by_name=b_name))
+
     return BaseResp.ok(
         PagedData(
-            items=[_doc_to_out(d) for d in docs],
+            items=items,
             total=total,
             page=page,
             page_size=page_size,
@@ -325,7 +459,78 @@ async def get_document(
     chunk_count = await db.scalar(
         select(func.count(DocChunk.id)).where(DocChunk.doc_id == doc_id)
     )
-    return BaseResp.ok(_doc_to_out(doc, chunk_count=chunk_count or 0))
+    s_name, b_name = await _doc_chain_names(db, doc)
+    return BaseResp.ok(_doc_to_out(doc, chunk_count=chunk_count or 0,
+                                   supersedes_name=s_name, superseded_by_name=b_name))
+
+
+@router.get("/{doc_id}/version-chain", response_model=BaseResp[list[VersionChainItem]])
+async def get_document_version_chain(
+    doc_id: int,
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """查看版本链：旧版 ← 当前 → 新版。"""
+    doc = await _load_doc(db, doc_id)
+    _check_doc_scope(current_user, doc)
+
+    async def _load(id_: int) -> Document | None:
+        return await db.get(Document, id_)
+
+    chain_ids: list[int] = []
+    # 向上：沿 supersedes 找旧版
+    cur = doc
+    seen: set[int] = set()
+    ancestors: list[Document] = []
+    while cur.supersedes_doc_id and cur.supersedes_doc_id not in seen:
+        seen.add(cur.supersedes_doc_id)
+        old = await _load(cur.supersedes_doc_id)
+        if not old:
+            break
+        ancestors.append(old)
+        cur = old
+    # 向下：找替代本文档的新版
+    descendants: list[Document] = []
+    cur = doc
+    seen2: set[int] = set()
+    while True:
+        newer = await db.scalar(
+            select(Document).where(Document.supersedes_doc_id == cur.id).limit(1)
+        )
+        if not newer or newer.id in seen2:
+            break
+        seen2.add(newer.id)
+        descendants.append(newer)
+        cur = newer
+
+    items: list[VersionChainItem] = []
+    for old in reversed(ancestors):
+        items.append(VersionChainItem(
+            id=old.id,
+            file_name=old.file_name,
+            lifecycle=old.lifecycle.value if old.lifecycle else "effective",
+            effective_date=old.effective_date.isoformat() if old.effective_date else None,
+            status=old.status.value,
+            is_self=False,
+        ))
+    items.append(VersionChainItem(
+        id=doc.id,
+        file_name=doc.file_name,
+        lifecycle=doc.lifecycle.value if doc.lifecycle else "effective",
+        effective_date=doc.effective_date.isoformat() if doc.effective_date else None,
+        status=doc.status.value,
+        is_self=True,
+    ))
+    for newer in descendants:
+        items.append(VersionChainItem(
+            id=newer.id,
+            file_name=newer.file_name,
+            lifecycle=newer.lifecycle.value if newer.lifecycle else "effective",
+            effective_date=newer.effective_date.isoformat() if newer.effective_date else None,
+            status=newer.status.value,
+            is_self=False,
+        ))
+    return BaseResp.ok(items)
 
 
 # ------------------------------------------------------------------
@@ -374,6 +579,54 @@ async def update_document(
         doc.version = req.version
         new_val["version"] = req.version
 
+    if req.lifecycle is not None:
+        try:
+            new_life = DocLifecycle(req.lifecycle)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"code": 42200, "message": f"无效 lifecycle 值：{req.lifecycle}"},
+            )
+        # 切到 superseded 等于退出默认召回：dept_admin 不得对 global / 他部门文档操作
+        if new_life != DocLifecycle.effective and current_user.role != UserRole.super_admin:
+            if doc.visibility == DocVisibility.global_ or doc.dept_id != current_user.dept_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={"code": 40303, "message": "dept_admin 不可将全体共享/其他部门文档改为非现行状态"},
+                )
+        old_val["lifecycle"] = doc.lifecycle.value
+        doc.lifecycle = new_life
+        new_val["lifecycle"] = new_life.value
+        await write_audit(
+            db,
+            operator_id=current_user.id,
+            operator_name=current_user.real_name,
+            action=AuditAction.DOC_LIFECYCLE,
+            resource_type="document",
+            resource_id=str(doc.id),
+            old_value={"lifecycle": old_val["lifecycle"]},
+            new_value={"lifecycle": new_life.value},
+            ip_address=_get_ip(request),
+        )
+
+    if req.effective_date is not None:
+        import datetime as _dt
+        old_val["effective_date"] = (
+            doc.effective_date.isoformat() if doc.effective_date else None
+        )
+        if req.effective_date == "":
+            doc.effective_date = None
+            new_val["effective_date"] = None
+        else:
+            try:
+                doc.effective_date = _dt.date.fromisoformat(req.effective_date.strip())
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={"code": 42200, "message": "effective_date 格式应为 YYYY-MM-DD"},
+                )
+            new_val["effective_date"] = doc.effective_date.isoformat()
+
     await write_audit(
         db,
         operator_id=current_user.id,
@@ -403,10 +656,12 @@ async def update_document(
         )
         .where(Document.id == doc_id)
     )
+    s_name, b_name = await _doc_chain_names(db, doc)
 
     logger.info("Document updated | doc_id={doc_id} | by={operator}", doc_id=doc_id, operator=current_user.username)
 
-    return BaseResp.ok(_doc_to_out(doc, chunk_count=chunk_count or 0))
+    return BaseResp.ok(_doc_to_out(doc, chunk_count=chunk_count or 0,
+                                   supersedes_name=s_name, superseded_by_name=b_name))
 
 
 # ------------------------------------------------------------------

@@ -273,8 +273,10 @@ async def seed_documents(engine, dept_ids: dict[str, int], user_ids: dict[str, i
     """
     按 seed_docs/manifest.json 灌入 documents + doc_chunks + embeddings + tsv。
 
-    幂等：同名 ready 文档仅校正 visibility/白名单，不重复解析。
+    幂等：同名 ready 文档仅校正 visibility/lifecycle/白名单，不重复解析。
+    Q1：按 manifest 写 lifecycle / effective_date；supersedes 二遍建版本链。
     """
+    import datetime as dt
     import shutil
     from pathlib import Path
 
@@ -293,7 +295,10 @@ async def seed_documents(engine, dept_ids: dict[str, int], user_ids: dict[str, i
         return
 
     from sqlalchemy import select
-    from db.models import DocChunk, DocPermission, DocStatus, Document, DocVisibility, Embedding
+    from db.models import (
+        DocChunk, DocLifecycle, DocPermission, DocStatus,
+        Document, DocVisibility, Embedding,
+    )
     from services.chunker import chunk_segments
     from services.document_parser import parse_document
     from services.embedder import get_embeddings_batch
@@ -302,12 +307,31 @@ async def seed_documents(engine, dept_ids: dict[str, int], user_ids: dict[str, i
     Session = async_sessionmaker(bind=engine, expire_on_commit=False)
     admin_id = user_ids.get("rdadmin") or next(iter(user_ids.values()))
 
+    def _parse_life(spec: dict) -> DocLifecycle:
+        try:
+            return DocLifecycle(spec.get("lifecycle") or "effective")
+        except ValueError:
+            return DocLifecycle.effective
+
+    def _parse_date(spec: dict):
+        raw = spec.get("effective_date")
+        if not raw:
+            return None
+        try:
+            return dt.date.fromisoformat(str(raw).strip())
+        except ValueError:
+            return None
+
+    name_to_id: dict[str, int] = {}
+
     async with Session() as db:
         for spec in specs:
             fname = spec["file"]
             visibility = spec.get("visibility") or "global"
             dept_code = spec.get("dept")
             whitelist = spec.get("whitelist") or []
+            lifecycle = _parse_life(spec)
+            eff_date = _parse_date(spec)
 
             src = src_dir / fname
             if not src.exists():
@@ -324,6 +348,12 @@ async def seed_documents(engine, dept_ids: dict[str, int], user_ids: dict[str, i
                 changed = False
                 if existing.visibility.value != visibility:
                     existing.visibility = DocVisibility(visibility)
+                    changed = True
+                if existing.lifecycle != lifecycle:
+                    existing.lifecycle = lifecycle
+                    changed = True
+                if existing.effective_date != eff_date:
+                    existing.effective_date = eff_date
                     changed = True
                 if visibility == "specific_users":
                     for uname in whitelist:
@@ -343,9 +373,10 @@ async def seed_documents(engine, dept_ids: dict[str, int], user_ids: dict[str, i
                                 granted_by=admin_id,
                             ))
                             changed = True
+                name_to_id[fname] = existing.id
                 if changed:
                     await db.commit()
-                    print(f"  已校正可见性: {fname} → {visibility}")
+                    print(f"  已校正元数据: {fname} → {visibility}/{lifecycle.value}")
                 else:
                     print(f"  文档已存在，跳过: {fname}")
                 continue
@@ -367,12 +398,15 @@ async def seed_documents(engine, dept_ids: dict[str, int], user_ids: dict[str, i
                 dept_id=dept_id,
                 visibility=DocVisibility(visibility),
                 status=DocStatus.processing,
+                lifecycle=lifecycle,
+                effective_date=eff_date,
                 category=spec.get("category") or "制度",
                 version="v1",
                 uploaded_by=admin_id,
             )
             db.add(doc)
             await db.flush()
+            name_to_id[fname] = doc.id
 
             try:
                 segments = parse_document(str(dest), "md")
@@ -421,10 +455,36 @@ async def seed_documents(engine, dept_ids: dict[str, int], user_ids: dict[str, i
 
                 doc.status = DocStatus.ready
                 await db.commit()
-                print(f"  已入库: {fname} | visibility={visibility} | chunks={len(chunks_data)}")
+                print(f"  已入库: {fname} | visibility={visibility} | lifecycle={lifecycle.value} | chunks={len(chunks_data)}")
             except Exception as exc:
                 await db.rollback()
                 print(f"[error] 文档入库失败 {fname}: {exc}")
+
+        # 二遍：按 manifest.supersedes 建版本链
+        for spec in specs:
+            sup_name = spec.get("supersedes")
+            if not sup_name:
+                continue
+            new_name = spec["file"]
+            new_id = name_to_id.get(new_name)
+            old_id = name_to_id.get(sup_name)
+            if not new_id or not old_id:
+                print(f"[warn] 版本链跳过 {new_name} ← {sup_name}")
+                continue
+            new_doc = await db.get(Document, new_id)
+            old_doc = await db.get(Document, old_id)
+            if not new_doc or not old_doc:
+                continue
+            changed = False
+            if new_doc.supersedes_doc_id != old_id:
+                new_doc.supersedes_doc_id = old_id
+                changed = True
+            if old_doc.lifecycle != DocLifecycle.superseded:
+                old_doc.lifecycle = DocLifecycle.superseded
+                changed = True
+            if changed:
+                await db.commit()
+                print(f"  版本链: {new_name} supersedes {sup_name}")
 
 
 if __name__ == "__main__":
