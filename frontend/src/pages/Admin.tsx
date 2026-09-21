@@ -1,5 +1,5 @@
 /**
- * 管理后台 — 部门 / 账号 / 文档 / 审批 / Trace / 审计 / 日志 / 设置
+ * 管理后台 — 部门 / 账号 / 文档 / 审批 / Trace / 评测 / 审计 / 日志 / 设置
  * 访问权限：dept_admin 或 super_admin
  */
 import { useState } from 'react'
@@ -8,7 +8,7 @@ import {
   ArrowLeftOutlined, BankOutlined, TeamOutlined, FileTextOutlined,
   AuditOutlined, SettingOutlined, FileSearchOutlined,
   SafetyCertificateOutlined, NodeIndexOutlined, ToolOutlined,
-  AlertOutlined,
+  AlertOutlined, ExperimentOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { getStoredUser } from '../hooks/useAuth'
@@ -19,6 +19,7 @@ import ApprovalsTab from './admin/ApprovalsTab'
 import TracesTab from './admin/TracesTab'
 import TicketsTab from './admin/TicketsTab'
 import GapsTab from './admin/GapsTab'
+import EvalTab from './admin/EvalTab'
 import AuditLogsTab from './admin/AuditLogsTab'
 import SystemSettingsTab from './admin/SystemSettingsTab'
 import SystemLogsTab from './admin/SystemLogsTab'
@@ -28,7 +29,7 @@ const { Text } = Typography
 
 type TabKey =
   | 'departments' | 'users' | 'documents'
-  | 'approvals' | 'tickets' | 'traces' | 'gaps'
+  | 'approvals' | 'tickets' | 'traces' | 'gaps' | 'eval'
   | 'audit' | 'settings' | 'logs'
 
 export default function Admin() {
@@ -46,6 +47,7 @@ export default function Admin() {
     { key: 'traces',     icon: <NodeIndexOutlined />, label: 'Agent Trace' },
     ...(isSuperAdmin ? [
       { key: 'gaps',     icon: <AlertOutlined />,     label: '知识缺口' },
+      { key: 'eval',     icon: <ExperimentOutlined />, label: '评测' },
       { key: 'audit',    icon: <AuditOutlined />,    label: '审计日志' },
       { key: 'logs',     icon: <FileSearchOutlined />, label: '系统日志' },
       { key: 'settings', icon: <SettingOutlined />,  label: '系统设置' },
@@ -60,6 +62,7 @@ export default function Admin() {
     tickets:     <TicketsTab />,
     traces:      <TracesTab />,
     gaps:        <GapsTab />,
+    eval:        <EvalTab />,
     audit:       <AuditLogsTab />,
     logs:        <SystemLogsTab />,
     settings:    <SystemSettingsTab />,
