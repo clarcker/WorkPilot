@@ -340,6 +340,40 @@ async def submit_reimbursement_request(args: dict, ctx: ToolContext) -> ToolResu
         if not user:
             return ToolResult(success=False, error="用户不存在")
 
+        # Q2：会话内已有 draft 时直接复用确认卡，不新建
+        existing_draft = await db.scalar(
+            select(ReimbursementRequest)
+            .where(
+                ReimbursementRequest.user_id == ctx.user_id,
+                ReimbursementRequest.status == "draft",
+            )
+            .order_by(ReimbursementRequest.id.desc())
+            .limit(1)
+        )
+        if existing_draft:
+            form = {
+                "category": existing_draft.category,
+                "amount": existing_draft.amount,
+                "days": existing_draft.days,
+                "trip_start": existing_draft.trip_start,
+                "trip_end": existing_draft.trip_end,
+                "approval_ref": existing_draft.approval_ref,
+            }
+            return ToolResult(
+                success=True,
+                requires_confirmation=True,
+                data={
+                    "request_id": existing_draft.id,
+                    "request_no": existing_draft.request_no,
+                    "status": existing_draft.status,
+                    "requires_confirmation": True,
+                    "message": "已有待确认草稿，直接复用（未新建）",
+                    "form": form,
+                    "precheck": existing_draft.precheck_result,
+                    "reused_draft": True,
+                },
+            )
+
         existing = await db.scalar(
             select(ReimbursementRequest).where(
                 ReimbursementRequest.idempotency_key == idem_key

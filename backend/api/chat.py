@@ -226,6 +226,27 @@ async def _rag_gen(
         for m in reversed(hist_rows.scalars().all())
     ]
 
+    # ── 4b. 本会话已执行工具（Q2 多轮工具决策）────────────────────
+    from db.models import ToolCall
+    session_tool_calls: list[dict] = []
+    if not is_new_conv:
+        tc_rows = await db.execute(
+            select(ToolCall)
+            .where(ToolCall.conversation_id == conv.id)
+            .order_by(ToolCall.created_at.desc(), ToolCall.id.desc())
+            .limit(8)
+        )
+        session_tool_calls = [
+            {
+                "tool_name": r.tool_name,
+                "tool_args": r.tool_args or {},
+                "tool_result": r.tool_result,
+                "success": bool(r.allowed and not r.error),
+                "error": r.error or r.deny_reason,
+            }
+            for r in reversed(tc_rows.scalars().all())
+        ]
+
     # ── 5. 运行 LangGraph RAG 流水线 ─────────────────────────────
     token_queue: asyncio.Queue = asyncio.Queue()
 
@@ -235,6 +256,7 @@ async def _rag_gen(
         user_role=user_role,
         user_dept_id=user_dept_id,
         conversation_history=history,
+        conversation_id=conv.id,
         anonymized_query="",
         intent="",
         retrieved_chunks=[],
@@ -250,6 +272,7 @@ async def _rag_gen(
         trace=[],
         tool_step=0,
         tool_history=[],
+        session_tool_calls=session_tool_calls,
         max_tool_steps=4,
         node_steps=[],
         requires_confirmation=False,

@@ -25,12 +25,14 @@ class RAGState(TypedDict):
     user_role:        str            # "super_admin" | "dept_admin" | "employee"
     user_dept_id:     Optional[int]
     conversation_history: list[HistoryMessage]  # 最近 N 轮历史（不含当前问题）
+    conversation_id:  NotRequired[Optional[int]]  # 会话 ID，供工具决策读本会话 tool_calls
 
     # ── 脱敏节点输出 ───────────────────────────────
     anonymized_query: str
 
     # ── 意图分类节点输出 ───────────────────────────
     intent: str    # "rag" | "chitchat"
+    time_scope: NotRequired[Optional[str]]  # "current" | "historical"（Q1）
 
     # ── 检索节点输出 ───────────────────────────────
     retrieved_chunks: list[dict]   # RetrievedChunk TypedDict 列表
@@ -56,8 +58,10 @@ class RAGState(TypedDict):
 
     # ── 多步工具循环 ─────────────────────────────────
     tool_step:       NotRequired[int]           # 已执行工具次数
-    tool_history:    NotRequired[list[dict]]    # [{name,args,result,success}]
+    tool_history:    NotRequired[list[dict]]    # [{name,args,result,success}] 本轮
     max_tool_steps:  NotRequired[int]           # 默认 4
+    # 本会话（跨轮）已执行过的工具摘要，Q2 多轮工具决策
+    session_tool_calls: NotRequired[list[dict]]
     # 写操作确认 / 槽位缺失
     requires_confirmation: NotRequired[bool]
     confirm_payload: NotRequired[Optional[dict]]
