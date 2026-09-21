@@ -40,17 +40,28 @@ async def list_eval_runs(
         {
             "id": r.id,
             "started_at": r.started_at.isoformat() if r.started_at else None,
+            "finished_at": r.finished_at.isoformat() if r.finished_at else None,
             "total_cases": r.total_cases,
             "scored_cases": r.scored_cases,
             "timeout_count": r.timeout_count,
             "intent_accuracy": r.intent_accuracy,
             "doc_hit_rate": r.doc_hit_rate,
+            "mrr": r.mrr,
             "tool_call_accuracy": r.tool_call_accuracy,
             "citation_rate": r.citation_rate,
             "permission_pass_rate": r.permission_pass_rate,
             "avg_latency_ms": r.avg_latency_ms,
             "failed_cases": r.failed_cases,
             "note": r.note,
+            "label": r.label,
+            "mode": r.mode or "fast",
+            "status": r.status or "finished",
+            "progress": r.progress,
+            "judge_model": r.judge_model,
+            "faithfulness_avg": r.faithfulness_avg,
+            "points_coverage": r.points_coverage,
+            "hallucination_count": r.hallucination_count,
+            "refusal_correct_rate": r.refusal_correct_rate,
         }
         for r in rows
     ])
@@ -65,17 +76,114 @@ async def get_eval_run(
     r = await db.scalar(select(EvalRun).where(EvalRun.id == run_id))
     if not r:
         raise HTTPException(404, detail={"code": 40400, "message": "评测记录不存在"})
+    case_results = r.case_results or []
     return BaseResp.ok({
         "id": r.id,
-        "case_results": r.case_results,
+        "mode": r.mode or "fast",
+        "label": r.label,
+        "status": r.status or "finished",
+        "progress": r.progress,
+        "total_cases": r.total_cases,
+        "scored_cases": r.scored_cases,
+        "case_results": case_results,
         "failed_cases": r.failed_cases,
+        "note": r.note,
+        "judge_model": r.judge_model,
+        "faithfulness_avg": r.faithfulness_avg,
+        "points_coverage": r.points_coverage,
+        "hallucination_count": r.hallucination_count,
+        "refusal_correct_rate": r.refusal_correct_rate,
         "metrics": {
             "intent_accuracy": r.intent_accuracy,
             "doc_hit_rate": r.doc_hit_rate,
+            "mrr": r.mrr,
             "tool_call_accuracy": r.tool_call_accuracy,
             "citation_rate": r.citation_rate,
             "permission_pass_rate": r.permission_pass_rate,
+            "faithfulness_avg": r.faithfulness_avg,
+            "points_coverage": r.points_coverage,
+            "hallucination_count": r.hallucination_count,
+            "refusal_correct_rate": r.refusal_correct_rate,
         },
+        "judge_cases": [
+            {
+                "case_id": c.get("case_id"),
+                "question": c.get("question"),
+                "group": c.get("group"),
+                "judge": c.get("judge"),
+                "answer_preview": c.get("answer_preview"),
+            }
+            for c in case_results
+            if c.get("judge")
+        ],
+    })
+
+
+@router.get("/runs/{run_id}/diff", response_model=BaseResp[dict])
+async def diff_eval_runs(
+    run_id: int,
+    other_id: int = Query(..., description="对比 run id"),
+    current_user: User = Depends(require_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """两次运行 case 级 diff：通过↔失败。"""
+    a = await db.scalar(select(EvalRun).where(EvalRun.id == run_id))
+    b = await db.scalar(select(EvalRun).where(EvalRun.id == other_id))
+    if not a or not b:
+        raise HTTPException(404, detail={"code": 40400, "message": "评测记录不存在"})
+
+    def _passed(c: dict) -> bool:
+        j = c.get("judge") or {}
+        if j.get("error"):
+            return False
+        if j.get("hallucinated_claims"):
+            return False
+        return bool(
+            c.get("intent_correct")
+            and c.get("doc_hit")
+            and c.get("tool_call_correct")
+            and c.get("has_citation")
+            and not c.get("forbidden_doc_leaked")
+        )
+
+    def _index(run: EvalRun) -> dict[str, dict]:
+        return {c.get("case_id"): c for c in (run.case_results or []) if c.get("case_id")}
+
+    ia, ib = _index(a), _index(b)
+    all_ids = sorted(set(ia) | set(ib))
+    became_pass, became_fail, still_fail = [], [], []
+    for cid in all_ids:
+        ca, cb = ia.get(cid), ib.get(cid)
+        pa = _passed(ca) if ca else False
+        pb = _passed(cb) if cb else False
+        question = (cb or ca or {}).get("question") or cid
+        group = (cb or ca or {}).get("group") or ""
+        item = {"case_id": cid, "question": question, "group": group,
+                "a_passed": pa, "b_passed": pb}
+        if ca and cb:
+            if not pa and pb:
+                became_pass.append(item)
+            elif pa and not pb:
+                became_fail.append(item)
+            elif not pa and not pb:
+                still_fail.append(item)
+    by_group = {}
+    for item in became_fail + became_pass + still_fail:
+        g = item["group"] or "default"
+        by_group.setdefault(g, {"became_pass": 0, "became_fail": 0, "still_fail": 0})
+        if item in became_pass:
+            by_group[g]["became_pass"] += 1
+        elif item in became_fail:
+            by_group[g]["became_fail"] += 1
+        else:
+            by_group[g]["still_fail"] += 1
+    return BaseResp.ok({
+        "run_a": {"id": a.id, "label": a.label, "mode": a.mode},
+        "run_b": {"id": b.id, "label": b.label, "mode": b.mode},
+        "became_pass": became_pass,
+        "became_fail": became_fail,
+        "still_fail": still_fail,
+        "by_group": by_group,
     })
 
 
@@ -264,3 +372,178 @@ async def seed_cases_from_json(
 
     n = await seed_eval_cases_from_json(created_by=current_user.id)
     return BaseResp.ok({"imported": n})
+
+
+# ── Q4 评测 Case 管理 ─────────────────────────────────────────
+
+class EvalCaseBody(BaseModel):
+    case_id: str | None = None
+    question: str
+    group: str | None = None
+    payload: dict
+    active: bool = True
+
+
+class EvalCasePatch(BaseModel):
+    question: str | None = None
+    group: str | None = None
+    payload: dict | None = None
+    active: bool | None = None
+
+
+def _case_out(row) -> dict:
+    return {
+        "id": row.id,
+        "case_id": row.case_id,
+        "question": row.question,
+        "group": row.group,
+        "payload": row.payload,
+        "source": row.source,
+        "active": row.active,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+@router.get("/eval-cases", response_model=BaseResp[PagedData[dict]])
+async def list_eval_cases(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    group: str | None = Query(None),
+    active: bool | None = Query(None),
+    keyword: str | None = Query(None, max_length=100),
+    current_user: User = Depends(require_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    from db.models import EvalCase
+
+    conditions = []
+    if group:
+        conditions.append(EvalCase.group == group)
+    if active is not None:
+        conditions.append(EvalCase.active == active)
+    if keyword:
+        conditions.append(EvalCase.question.ilike(f"%{keyword}%"))
+
+    count_stmt = select(func.count(EvalCase.id))
+    data_stmt = select(EvalCase).order_by(EvalCase.case_id.asc())
+    for cond in conditions:
+        count_stmt = count_stmt.where(cond)
+        data_stmt = data_stmt.where(cond)
+    total = await db.scalar(count_stmt) or 0
+    rows = (
+        await db.execute(data_stmt.offset((page - 1) * page_size).limit(page_size))
+    ).scalars().all()
+
+    groups = (
+        await db.execute(select(EvalCase.group).distinct())
+    ).scalars().all()
+    return BaseResp.ok(PagedData(
+        items=[_case_out(r) for r in rows],
+        total=total,
+        page=page,
+        page_size=page_size,
+    ))
+
+
+@router.get("/eval-cases/groups", response_model=BaseResp[list[str]])
+async def list_eval_case_groups(
+    current_user: User = Depends(require_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    from db.models import EvalCase
+    rows = (
+        await db.execute(select(EvalCase.group).where(EvalCase.group.isnot(None)).distinct())
+    ).scalars().all()
+    return BaseResp.ok(sorted([g for g in rows if g]))
+
+
+@router.get("/eval-cases/{case_id}", response_model=BaseResp[dict])
+async def get_eval_case(
+    case_id: str,
+    current_user: User = Depends(require_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    from db.models import EvalCase
+    row = await db.scalar(select(EvalCase).where(EvalCase.case_id == case_id))
+    if not row:
+        raise HTTPException(404, detail={"code": 40400, "message": "case 不存在"})
+    # 最近一次结果
+    last = await db.scalar(select(EvalRun).order_by(EvalRun.id.desc()).limit(1))
+    last_result = None
+    if last and last.case_results:
+        for c in last.case_results:
+            if c.get("case_id") == case_id:
+                last_result = c
+                break
+    out = _case_out(row)
+    out["last_run"] = {
+        "run_id": last.id if last else None,
+        "mode": last.mode if last else None,
+        "label": last.label if last else None,
+        "result": last_result,
+    } if last else None
+    return BaseResp.ok(out)
+
+
+@router.post("/eval-cases", response_model=BaseResp[dict])
+async def create_eval_case(
+    body: EvalCaseBody,
+    current_user: User = Depends(require_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    from db.models import EvalCase
+
+    cid = body.case_id or body.payload.get("id")
+    if not cid:
+        n = await db.scalar(select(func.count(EvalCase.id))) or 0
+        cid = f"case_{n + 1:03d}"
+    existing = await db.scalar(select(EvalCase).where(EvalCase.case_id == cid))
+    if existing:
+        raise HTTPException(409, detail={"code": 40900, "message": f"case_id 已存在: {cid}"})
+    payload = dict(body.payload or {})
+    payload.setdefault("id", cid)
+    payload.setdefault("question", body.question)
+    if body.group:
+        payload["group"] = body.group
+    row = EvalCase(
+        case_id=cid,
+        question=body.question,
+        group=body.group or payload.get("group"),
+        payload=payload,
+        source="manual",
+        active=body.active,
+        created_by=current_user.id,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return BaseResp.ok(_case_out(row), message="已创建")
+
+
+@router.patch("/eval-cases/{case_id}", response_model=BaseResp[dict])
+async def update_eval_case(
+    case_id: str,
+    body: EvalCasePatch,
+    current_user: User = Depends(require_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    from db.models import EvalCase
+    row = await db.scalar(select(EvalCase).where(EvalCase.case_id == case_id))
+    if not row:
+        raise HTTPException(404, detail={"code": 40400, "message": "case 不存在"})
+    if body.question is not None:
+        row.question = body.question
+        row.payload = {**(row.payload or {}), "question": body.question}
+    if body.group is not None:
+        row.group = body.group
+        row.payload = {**(row.payload or {}), "group": body.group}
+    if body.payload is not None:
+        row.payload = body.payload
+        row.question = body.payload.get("question") or row.question
+        row.group = body.payload.get("group") or row.group
+    if body.active is not None:
+        row.active = body.active
+        row.payload = {**(row.payload or {}), "active": body.active}
+    await db.commit()
+    await db.refresh(row)
+    return BaseResp.ok(_case_out(row), message="已更新")

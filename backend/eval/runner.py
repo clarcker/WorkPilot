@@ -11,6 +11,8 @@ Eval runner — 运行 golden cases 评测 RAG 工作流。
 - skip_generation=True 时 citation_rate 不评估答案正文质量，只看 sources 列表
 
 conversation_history: case 可带 history 字段（list of {role,content}），用于多轮改写评测。
+session_tool_calls / time_scope: Q2/Q1 case 字段。
+mode=judge: 生成答案后调用 LLM-as-judge（eval/judge.py），只评 judge=true 的 case。
 """
 from __future__ import annotations
 
@@ -29,6 +31,7 @@ from services.llm_client import chat_complete
 
 _CASES_PATH = Path(__file__).parent / "cases.json"
 DEFAULT_CASE_TIMEOUT = 90.0
+JUDGE_CASE_TIMEOUT = 180.0
 
 
 @dataclass
@@ -51,6 +54,14 @@ class CaseResult:
     timed_out: bool = False
     error: Optional[str] = None
     detail: str = ""
+    has_expected_doc: bool = False
+    answer: str = ""
+    sources: list = field(default_factory=list)
+    tool_name: Optional[str] = None
+    tool_result: Optional[dict] = None
+    tool_success: Optional[bool] = None
+    tool_error: Optional[str] = None
+    judge: Optional[dict] = None
 
 
 @dataclass
@@ -71,6 +82,14 @@ class EvalReport:
     failed_cases: list[dict] = field(default_factory=list)
     timeout_cases: list[dict] = field(default_factory=list)
     by_group: dict = field(default_factory=dict)
+    # Q3
+    mode: str = "fast"
+    judge_model: Optional[str] = None
+    faithfulness_avg: Optional[float] = None
+    points_coverage: Optional[float] = None
+    hallucination_count: int = 0
+    refusal_correct_rate: Optional[float] = None
+    local_judge: bool = False
 
 
 async def warmup() -> float:
@@ -182,6 +201,7 @@ async def run_case(
     tool_dry_run: bool = True,
     gen_max_tokens: int | None = 512,
     timeout: float = DEFAULT_CASE_TIMEOUT,
+    judge: bool = False,
 ) -> CaseResult:
     # 部分 case 必须以固定身份运行（例如权限负例），as_user 覆盖调用者身份
     as_user = case.get("as_user") or {}
@@ -192,6 +212,9 @@ async def run_case(
     start = time.time()
     # ── 多轮 history ────────────────────────────────────────────
     history = case.get("conversation_history") or case.get("history") or []
+    session_tool_calls = case.get("session_tool_calls") or []
+    # case 可强制 time_scope（对照实验）；否则由 query_understand 判定
+    time_scope = case.get("time_scope")
 
     initial_state = RAGState(
         query=case["question"],
@@ -199,8 +222,10 @@ async def run_case(
         user_role=run_user_role,
         user_dept_id=run_user_dept_id,
         conversation_history=history,
+        conversation_id=case.get("conversation_id"),
         anonymized_query="",
         intent="",
+        time_scope=time_scope,
         retrieved_chunks=[],
         full_answer="",
         sources=[],
@@ -216,6 +241,7 @@ async def run_case(
         tool_error=None,
         tool_step=0,
         tool_history=[],
+        session_tool_calls=session_tool_calls,
         max_tool_steps=4,
         node_steps=[],
         requires_confirmation=False,
@@ -239,6 +265,7 @@ async def run_case(
             group=case.get("group") or "",
             timed_out=timed_out, error=err,
             detail=f"超时（>{timeout:.0f}s），本条无观测值" if timed_out else err,
+            has_expected_doc=bool((case.get("expected_doc_title") or "").strip()),
         )
 
     try:
@@ -255,6 +282,7 @@ async def run_case(
     actual_intent = final_state.get("intent", "")
     expected_intent = case.get("expected_intent", "")
     intent_correct = actual_intent == expected_intent
+    full_answer = final_state.get("full_answer") or ""
 
     # ── 检索指标（E2）───────────────────────────────────────────
     sources = final_state.get("sources", [])
@@ -371,6 +399,14 @@ async def run_case(
         group=case.get("group") or "",
         error=final_state.get("error"),
         detail="; ".join(detail_parts),
+        has_expected_doc=bool(expected_title),
+        answer=full_answer,
+        sources=sources,
+        tool_name=final_state.get("tool_name"),
+        tool_result=final_state.get("tool_result"),
+        tool_success=final_state.get("tool_success"),
+        tool_error=final_state.get("tool_error") or final_state.get("permission_denied"),
+        judge=None,
     )
 
 
@@ -386,6 +422,11 @@ async def run_eval(
     tool_dry_run: bool = True,
     concurrency: int = 1,
     timeout: float = DEFAULT_CASE_TIMEOUT,
+    mode: str = "fast",
+    label: str | None = None,
+    operator_id: int | None = None,
+    only_case_ids: list[str] | None = None,
+    progress_cb=None,
 ) -> EvalReport:
     """
     Args:
@@ -394,6 +435,8 @@ async def run_eval(
         concurrency:     并发条数。>1 时 avg_latency_ms 会受相互争抢影响，
                          想看真实单条延迟请保持 1。
         timeout:         单条 case 墙钟上限
+        mode:            fast=检索/工具指标；judge=生成+LLM-as-judge（只评 judge=true）
+        progress_cb:     async (done, total) 进度回调（后台任务落库用）
     """
     cases = await load_cases_from_db()
     if not cases:
@@ -401,18 +444,58 @@ async def run_eval(
                           intent_accuracy=0, doc_hit_rate=0, tool_call_accuracy=0,
                           citation_rate=0, permission_pass_rate=0, avg_latency_ms=0)
 
+    if only_case_ids:
+        wanted = set(only_case_ids)
+        cases = [c for c in cases if c.get("id") in wanted]
+    if mode == "judge":
+        cases = [c for c in cases if c.get("judge")]
+        # judge 必须生成答案
+        skip_generation = False
+        timeout = max(timeout, JUDGE_CASE_TIMEOUT)
+        if not cases:
+            return EvalReport(total_cases=0, scored_cases=0, timeout_count=0,
+                              intent_accuracy=0, doc_hit_rate=0, tool_call_accuracy=0,
+                              citation_rate=0, permission_pass_rate=0, avg_latency_ms=0,
+                              mode="judge")
+
     # 先把两个模型加载进内存，避免第一条 case 独自承担冷启动开销
     await warmup()
 
     sem = asyncio.Semaphore(max(1, concurrency))
+    done_count = 0
 
     async def _run(case: dict) -> CaseResult:
+        nonlocal done_count
         async with sem:
-            return await run_case(
+            result = await run_case(
                 case, user_id, user_role, user_dept_id,
                 skip_generation=skip_generation, tool_dry_run=tool_dry_run,
                 timeout=timeout,
+                judge=(mode == "judge"),
             )
+            if mode == "judge":
+                from eval.judge import judge_answer
+                j = await judge_answer(
+                    question=case["question"],
+                    answer=result.answer,
+                    sources=result.sources or [],
+                    expected_points=case.get("expected_points") or [],
+                    expected_refusal=bool(case.get("expected_refusal")),
+                    expected_doc_title=case.get("expected_doc_title") or "",
+                    tool_name=result.tool_name,
+                    tool_result=result.tool_result,
+                    tool_success=result.tool_success,
+                    tool_error=result.tool_error,
+                )
+                j["_expected_refusal"] = bool(case.get("expected_refusal"))
+                result.judge = j
+            done_count += 1
+            if progress_cb:
+                try:
+                    await progress_cb(done_count, len(cases))
+                except Exception:
+                    pass
+            return result
 
     # gather 保序，下面按下标与 cases 对齐
     results: list[CaseResult] = list(await asyncio.gather(*(_run(c) for c in cases)))
@@ -429,14 +512,16 @@ async def run_eval(
     heading_pairs = [(r, c) for r, c in scored
                      if (c.get("expected_doc_title") or "").strip()]
 
-    avg_latency = sum(r.latency_ms for r in results) // total
+    avg_latency = sum(r.latency_ms for r in results) // total if total else 0
 
     failed = [
         {"case_id": r.case_id, "question": r.question, "detail": r.detail, "error": r.error,
-         "group": r.group, "doc_rank": r.doc_rank}
+         "group": r.group, "doc_rank": r.doc_rank,
+         "judge": r.judge}
         for r, _ in scored
         if not (r.intent_correct and r.doc_hit and r.tool_call_correct
                 and r.has_citation and not r.forbidden_doc_leaked)
+        or (r.judge and (r.judge.get("hallucinated_claims") or r.judge.get("error")))
     ]
     timed_out_cases = [
         {"case_id": r.case_id, "question": r.question,
@@ -451,19 +536,26 @@ async def run_eval(
         groups.setdefault(g, []).append(r)
     by_group = {}
     for g, items in groups.items():
-        ditems = [x for x in items if x.doc_rank >= 0 or (x.mrr == 0 and x.doc_hit)]
-        # 有期望文档的组员才有 doc 指标
-        doc_items = [x for x in items if x.mrr > 0 or x.doc_rank == -1]
-        # 简化：组内所有 case 都计入 mrr（无期望时 mrr=1，会拉高——因此只统计 group 内
-        # doc_rank 曾被计算过的（expected_title 有值）难以从 result 反推；
-        # 用 doc_rank != 0 区分：无期望时我们设 doc_rank=-1 且 mrr=1.0，
-        # 这里改为：mrr 组内平均时排除「未声明期望且 mrr==1 且 doc_hit」的情况不可靠。
-        # 采用：组报告仅对 intent/tool 统计全量，doc/mrr 在报告总表用 doc_pairs。
+        doc_scored = [x for x in items if x.has_expected_doc]
         by_group[g] = {
             "count": len(items),
             "intent_accuracy": _rate(sum(1 for x in items if x.intent_correct), len(items)),
             "tool_call_accuracy": _rate(sum(1 for x in items if x.tool_call_correct), len(items)),
+            "doc_hit_rate": _rate(sum(1 for x in doc_scored if x.doc_hit), len(doc_scored)) if doc_scored else None,
+            "mrr": round(sum(x.mrr for x in doc_scored) / len(doc_scored), 4) if doc_scored else None,
         }
+
+    judge_agg = {
+        "judge_model": None,
+        "faithfulness_avg": None,
+        "points_coverage": None,
+        "hallucination_count": 0,
+        "refusal_correct_rate": None,
+        "local_judge": False,
+    }
+    if mode == "judge":
+        from eval.judge import aggregate_judges
+        judge_agg = aggregate_judges([r.judge for r in results if r.judge])
 
     return EvalReport(
         total_cases=total,
@@ -484,4 +576,11 @@ async def run_eval(
         failed_cases=failed,
         timeout_cases=timed_out_cases,
         by_group=by_group,
+        mode=mode,
+        judge_model=judge_agg.get("judge_model"),
+        faithfulness_avg=judge_agg.get("faithfulness_avg"),
+        points_coverage=judge_agg.get("points_coverage"),
+        hallucination_count=judge_agg.get("hallucination_count") or 0,
+        refusal_correct_rate=judge_agg.get("refusal_correct_rate"),
+        local_judge=bool(judge_agg.get("local_judge")),
     )
