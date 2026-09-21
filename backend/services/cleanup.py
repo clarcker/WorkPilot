@@ -93,12 +93,45 @@ async def run_cleanup_once() -> dict:
     return {**conv_stats, "revoked_tokens": token_n}
 
 
+async def try_advisory_lock(lock_id: int = 918273645) -> bool:
+    """
+    多 worker 下同一周期只让一个进程执行 cleanup。
+    Scheduler 已用 PG JobStore；cleanup_loop 兜底路径也用 advisory lock。
+    """
+    from sqlalchemy import text
+    from db.session import async_session_factory
+    async with async_session_factory() as db:
+        row = await db.execute(
+            text("SELECT pg_try_advisory_lock(:lid)"), {"lid": lock_id}
+        )
+        val = row.scalar()
+        return bool(val)
+
+
+async def release_advisory_lock(lock_id: int = 918273645) -> None:
+    from sqlalchemy import text
+    from db.session import async_session_factory
+    try:
+        async with async_session_factory() as db:
+            await db.execute(text("SELECT pg_advisory_unlock(:lid)"), {"lid": lock_id})
+    except Exception:
+        pass
+
+
 async def cleanup_loop(stop_event: asyncio.Event, interval: float = _CLEANUP_INTERVAL_SECONDS) -> None:
-    """周期清理循环，直到 stop_event 被设置。"""
+    """周期清理循环，直到 stop_event 被设置。多 worker 下用 advisory lock 去重。"""
     logger.info("[cleanup] 后台清理任务启动 | interval={s}s", s=interval)
     while not stop_event.is_set():
         try:
-            await run_cleanup_once()
+            got = await try_advisory_lock()
+            if not got:
+                logger.debug("[cleanup] 未获 advisory lock，本周期跳过（其他 worker 执行中）")
+            else:
+                try:
+                    stats = await run_cleanup_once()
+                    logger.info("[cleanup] done | {s}", s=stats)
+                finally:
+                    await release_advisory_lock()
         except Exception as exc:
             logger.error("[cleanup] 清理任务失败: {e}", e=exc, exc_info=True)
         try:

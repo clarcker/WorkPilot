@@ -12,7 +12,7 @@
 | 基础设施 + 场景 A–D + Q1–Q5 | ✅ | 见 git 历史 |
 | Q6 R5 重排 | ⏸ | 门控样本曾不足；扩组后待复跑 |
 | P1 LLM 可靠性 | ✅ 代码 | 重试/熔断/降级/并发 queued；单测通过；演练数字待填性能基线.md |
-| P2 APScheduler + PG JobStore | ✅ 代码 | cleanup + 每日日报；`gunicorn -w 4` 验收待本机 |
+| P2 APScheduler + PG JobStore | ✅ 代码 | cleanup + 每日日报；**Windows 用 `uvicorn --workers 4`**（gunicorn 依赖 `fcntl`，仅 Linux/Docker） |
 | P3 压测 | ✅ 脚本 / ⬜ 数字 | `scripts/loadtest/chat_loadtest.py`；表格见性能基线.md |
 | P4 prompt 版本化 | ✅ | `backend/prompts/` + `prompt_set_version` 进 trace/eval_runs/diff |
 | P5 embedding 切换 | ✅ 接口 / ⬜ 来回切验收 | 同维度 reembed API；异维度拒绝 |

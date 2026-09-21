@@ -50,7 +50,10 @@ uv run alembic upgrade head
 uv run python scripts/seed_admin.py
 uv run python scripts/seed_demo.py
 uv run python scripts/seed_eval_cases.py
-uv run fastapi dev main.py
+# Windows：用 uvicorn（gunicorn 依赖 Unix fcntl，Windows 无法启动）
+uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+# Linux / Docker 生产：
+# uv run gunicorn -k uvicorn.workers.UvicornWorker -w 4 main:app -b 0.0.0.0:8000
 
 cd ../frontend
 npm install

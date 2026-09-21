@@ -2,8 +2,13 @@
 WorkPilot v2 — FastAPI 入口
 
 启动：
-    uv run fastapi dev main.py       # 开发（热重载，端口 8000）
-    uv run gunicorn main:app ...     # 生产
+    # Windows / 开发
+    uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+    uv run fastapi dev main.py
+    # 多 worker 验收（Windows 也可用）；gunicorn 仅 Linux/Docker（fcntl）
+    uv run uvicorn main:app --workers 4 --port 8000
+    # Linux / Docker 生产
+    uv run gunicorn -k uvicorn.workers.UvicornWorker -w 4 main:app -b 0.0.0.0:8000
 """
 import asyncio
 from contextlib import asynccontextmanager

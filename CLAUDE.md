@@ -69,7 +69,11 @@ v2/
 ```bash
 cd backend
 uv sync                        # 安装依赖
-uv run fastapi dev main.py     # 开发启动（热重载，端口 8000）
+# Windows：uvicorn / fastapi dev（gunicorn 依赖 Unix fcntl，不能在 Windows 跑）
+uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+# 或 uv run fastapi dev main.py
+# Linux/Docker 生产：
+# uv run gunicorn -k uvicorn.workers.UvicornWorker -w 4 main:app -b 0.0.0.0:8000
 uv add <package>               # 添加依赖
 ```
 

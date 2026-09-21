@@ -22,8 +22,50 @@ def get_scheduler():
     return _scheduler
 
 
+async def job_cleanup() -> None:
+    """模块级 job（SQLAlchemyJobStore 可序列化引用）。"""
+    from services.cleanup import run_cleanup_once
+    logger.info("[scheduler] job start | cleanup")
+    try:
+        stats = await run_cleanup_once()
+        logger.info("[scheduler] job done | cleanup | {s}", s=stats)
+    except Exception as exc:
+        logger.error(f"[scheduler] job failed | cleanup | {type(exc).__name__}: {exc}")
+        await write_job_audit("cleanup", f"{type(exc).__name__}: {exc}")
+
+
+async def job_daily_report() -> None:
+    from services.daily_report import generate_all_department_reports
+    logger.info("[scheduler] job start | daily_report")
+    try:
+        n = await generate_all_department_reports()
+        logger.info("[scheduler] job done | daily_report | n={n}", n=n)
+    except Exception as exc:
+        logger.error(f"[scheduler] job failed | daily_report | {type(exc).__name__}: {exc}")
+        await write_job_audit("daily_report", f"{type(exc).__name__}: {exc}")
+
+
+async def write_job_audit(job: str, detail: str) -> None:
+    try:
+        from db.models import AuditLog
+        from db.session import async_session_factory
+        async with async_session_factory() as db:
+            db.add(AuditLog(
+                operator_id=None,
+                operator_name="scheduler",
+                action="scheduler.job_failed",
+                resource_type="job",
+                resource_id=job,
+                detail=detail[:2000],
+                result="failed",
+            ))
+            await db.commit()
+    except Exception as exc:
+        logger.warning(f"[scheduler] audit write failed: {exc}")
+
+
 async def start_scheduler() -> None:
-    """启动全局调度器。多 worker 各起进程但 JobStore 在 PG，trigger 只触发一次执行锁。"""
+    """启动全局调度器。Job 函数必须在模块顶层，才能被 JobStore 序列化。"""
     global _scheduler, _started
     if not settings.scheduler_enabled:
         logger.info("[scheduler] disabled by config")
@@ -43,19 +85,16 @@ async def start_scheduler() -> None:
             "default": SQLAlchemyJobStore(url=_sync_db_url()),
         }
         _scheduler = AsyncIOScheduler(jobstores=jobstores, timezone="UTC")
-        from services.cleanup import run_cleanup_once
-        from services.daily_report import generate_all_department_reports
-
         _scheduler.add_job(
-            _run_job_logged(run_cleanup_once, "cleanup"),
-            CronTrigger(minute="17"),  # 避开整点，降低多 worker 撞车
+            "services.scheduler:job_cleanup",
+            CronTrigger(minute="17"),
             id="cleanup",
             replace_existing=True,
             max_instances=1,
             coalesce=True,
         )
         _scheduler.add_job(
-            _run_job_logged(generate_all_department_reports, "daily_report"),
+            "services.scheduler:job_daily_report",
             CronTrigger(hour=settings.daily_report_hour, minute="5"),
             id="daily_report",
             replace_existing=True,
@@ -70,25 +109,6 @@ async def start_scheduler() -> None:
         )
     except Exception as exc:
         logger.error(f"[scheduler] 启动失败: {type(exc).__name__}: {exc}")
-
-
-def _run_job_logged(fn, name: str):
-    async def _wrapper():
-        logger.info(f"[scheduler] job start | {name}")
-        try:
-            await fn()
-            logger.info(f"[scheduler] job done | {name}")
-        except Exception as exc:
-            logger.error(f"[scheduler] job failed | {name} | {type(exc).__name__}: {exc}")
-            try:
-                # 失败审计（同步写，best-effort）
-                import asyncio as _aio
-                from services.daily_report import write_scheduler_audit
-                await write_scheduler_audit(name, f"{type(exc).__name__}: {exc}")
-            except Exception:
-                pass
-
-    return _wrapper
 
 
 def stop_scheduler() -> None:
