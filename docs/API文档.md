@@ -695,6 +695,18 @@ Content-Type: application/json
 
 **SSE 事件类型（按出现顺序）**
 
+| 事件 | content | 说明 |
+|---|---|---|
+| `conversation_id` | number | 新会话 ID |
+| `queued` | `{position: n}` | LLM 并发排队；超 `llm_queue_timeout` 后跟 `error: 系统繁忙` |
+| `token` | string | 答案片段 |
+| `sources` | array | 引用来源（含 lifecycle） |
+| `tool_call` | object | 工具调用结果 |
+| `confirm_required` | object | 写操作确认卡 |
+| `form_incomplete` | object | 槽位缺失 |
+| `qa_id` | number | 反馈用 |
+| `done` / `error` | string | 结束 |
+
 | type | content 类型 | 说明 |
 |---|---|---|
 | `conversation_id` | **number**（整数） | 新建会话时第一条，客户端须保存用于后续追问 |
@@ -744,6 +756,7 @@ Content-Type: application/json
 ```
 data: {"type": "conversation_id", "content": 42}
 
+data: {"type": "queued", "content": {"position": 1}}
 data: {"type": "token", "content": "公司年假"}
 data: {"type": "token", "content": "政策如下："}
 

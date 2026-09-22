@@ -103,24 +103,69 @@ async def _try_become_leader() -> bool:
 
 
 async def _hold_leader_lock() -> None:
-    """保持连接；断开时本进程失去 leader（scheduler 继续跑但其他进程可抢锁）。"""
-    global _is_leader, _lock_conn
+    """
+    保持连接；锁丢失 → 立刻 shutdown 本进程 scheduler，避免与新 leader 双跑。
+    非 leader 另有 _follower_retry_loop 重试抢锁。
+    """
+    global _is_leader, _lock_conn, _started, _scheduler
     while _lock_conn is not None:
         try:
-            # 周期 ping，连接挂掉则退出
             await _lock_conn.fetchval("SELECT 1")
         except Exception as exc:
-            logger.warning(f"[scheduler] leader 锁连接丢失: {exc}")
+            logger.warning(f"[scheduler] leader 锁连接丢失，shutdown 本进程调度: {exc}")
             _is_leader = False
             _lock_conn = None
+            _started = False
+            if _scheduler is not None:
+                try:
+                    _scheduler.shutdown(wait=False)
+                except Exception:
+                    pass
+                _scheduler = None
             return
         await asyncio.sleep(30)
+
+
+async def _follower_retry_loop() -> None:
+    """非 leader 每 60s 重试抢锁；成功则启动调度（leader 宕机接管）。"""
+    global _is_leader, _started, _scheduler, _lock_hold_task
+    while not _is_leader and settings.scheduler_enabled:
+        await asyncio.sleep(60)
+        if _is_leader or _started:
+            return
+        if await _try_become_leader():
+            _is_leader = True
+            logger.info("[scheduler] 原 leader 失联，本 worker 接管")
+            try:
+                from apscheduler.schedulers.asyncio import AsyncIOScheduler
+                from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+                from apscheduler.triggers.cron import CronTrigger
+                jobstores = {"default": SQLAlchemyJobStore(url=_sync_db_url())}
+                _scheduler = AsyncIOScheduler(jobstores=jobstores, timezone=settings.scheduler_timezone)
+                _scheduler.add_job(
+                    "services.scheduler:job_cleanup",
+                    CronTrigger(minute="17"),
+                    id="cleanup", replace_existing=True, max_instances=1, coalesce=True,
+                )
+                _scheduler.add_job(
+                    "services.scheduler:job_daily_report",
+                    CronTrigger(hour=settings.daily_report_hour, minute="5"),
+                    id="daily_report", replace_existing=True, max_instances=1, coalesce=True,
+                )
+                _scheduler.start()
+                _started = True
+                _lock_hold_task = asyncio.create_task(_hold_leader_lock())
+                logger.info("[scheduler] 接管后调度已启动")
+            except Exception as exc:
+                logger.error(f"[scheduler] 接管启动失败: {exc}")
+                _is_leader = False
+            return
 
 
 async def start_scheduler() -> None:
     """
     多 worker：仅 advisory lock 选主成功的进程启动 APScheduler。
-    非 leader **不**再跑 cleanup_loop，避免 2N 执行者。
+    非 leader 每 60s 重试抢锁；leader 锁丢失则 shutdown 自身调度。
     """
     global _scheduler, _started, _is_leader, _lock_hold_task
     if not settings.scheduler_enabled:
@@ -131,7 +176,8 @@ async def start_scheduler() -> None:
 
     if not await _try_become_leader():
         _is_leader = False
-        logger.info("[scheduler] 本 worker 非 leader，跳过调度与 cleanup")
+        logger.info("[scheduler] 本 worker 非 leader，60s 后重试抢锁；不执行 cleanup")
+        asyncio.create_task(_follower_retry_loop())
         return
 
     _is_leader = True
@@ -141,7 +187,9 @@ async def start_scheduler() -> None:
         from apscheduler.triggers.cron import CronTrigger
 
         jobstores = {"default": SQLAlchemyJobStore(url=_sync_db_url())}
-        _scheduler = AsyncIOScheduler(jobstores=jobstores, timezone="UTC")
+        _scheduler = AsyncIOScheduler(
+            jobstores=jobstores, timezone=settings.scheduler_timezone
+        )
         _scheduler.add_job(
             "services.scheduler:job_cleanup",
             CronTrigger(minute="17"),
@@ -162,8 +210,10 @@ async def start_scheduler() -> None:
         _started = True
         _lock_hold_task = asyncio.create_task(_hold_leader_lock())
         logger.info(
-            "[scheduler] leader 启动调度 | jobs=cleanup,daily_report | report_hour={h} | lock_id={lid}",
+            "[scheduler] leader 启动调度 | jobs=cleanup,daily_report | "
+            "report_hour={h} tz={tz} | lock_id={lid}",
             h=settings.daily_report_hour,
+            tz=settings.scheduler_timezone,
             lid=SCHEDULER_ADVISORY_LOCK_ID,
         )
     except Exception as exc:

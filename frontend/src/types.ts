@@ -104,6 +104,7 @@ export interface FormIncompletePayload {
 
 export type SSEEvent =
   | { type: 'conversation_id'; content: number }
+  | { type: 'queued';           content: { position: number } }
   | { type: 'token';           content: string }
   | { type: 'sources';         content: Source[] }
   | { type: 'tool_call';       content: ToolCallInfo }

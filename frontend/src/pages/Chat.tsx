@@ -84,6 +84,7 @@ export default function Chat() {
   const [loadingConvs, setLoadingConvs]       = useState(false)
   const [loadingMsgs, setLoadingMsgs]         = useState(false)
   const [streaming, setStreaming]             = useState(false)
+  const [typingHint, setTypingHint]           = useState('')
   const [inputValue, setInputValue]           = useState('')
   const [siderCollapsed, setSiderCollapsed]   = useState(false)
   const [settingsOpen,   setSettingsOpen]     = useState(false)
@@ -291,7 +292,12 @@ export default function Chat() {
               setActiveId(evt.content)
               break
 
+            case 'queued':
+              setTypingHint(`排队中（第 ${Number((evt.content as { position?: number })?.position) || 1} 位）…`)
+              break
+
             case 'token':
+              setTypingHint('')
               tokenBuffer += evt.content
               setMessages((prev) =>
                 prev.map((m) =>
@@ -718,7 +724,7 @@ export default function Chat() {
         <div style={{ flex: 1, overflowY: 'auto', padding: '24px 0' }}>
           {loadingMsgs ? (
             <div style={{ textAlign: 'center', padding: 48 }}>
-              <Spin tip="加载消息中…" />
+              <Spin tip={typingHint || '加载消息中…'} />
             </div>
           ) : messages.length === 0 ? (
             <div
@@ -819,7 +825,7 @@ export default function Chat() {
           </div>
           <div style={{ maxWidth: 800, margin: '4px auto 0', textAlign: 'right' }}>
             <Text type="secondary" style={{ fontSize: 11 }}>
-              {streaming ? '正在生成回答…' : 'Enter 发送'}
+              {streaming ? (typingHint || '正在生成回答…') : 'Enter 发送'}
             </Text>
             {showRetry && (
               <Button

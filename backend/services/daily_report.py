@@ -123,45 +123,22 @@ def _extract_numbers(text: str) -> list[str]:
     return re.findall(r"\d+(?:\.\d+)?", text or "")
 
 
-def summary_numbers_allowed(summary: str, data: dict) -> bool:
+def summary_numbers_allowed(summary: str, data: dict, bullets: str | None = None) -> bool:
     """
-    确定性兜底：摘要中出现的每个数字都必须存在于结构化数据的数字集合中。
-    否则视为模型编数，丢弃摘要。
+    确定性兜底：摘要中的数字必须出现在结构化原文 bullets 的数字集合中。
+    不放行「1–31 日序」例外——凡 bullets 中不存在的数字一律拒绝。
     """
-    allowed = {str(int(x)) for x in (
-        data.get("qa_total") or 0,
-        data.get("qa_down") or 0,
-        data.get("pending_reimb") or 0,
-        data.get("pending_reimb_over_48h") or 0,
-        data.get("pending_tickets") or 0,
-        data.get("pending_tickets_over_48h") or 0,
-        data.get("eval_run_id") or 0,
-    )}
-    for g in data.get("gaps") or []:
-        allowed.add(str(int(g.get("count") or 0)))
-    for raw in (
-        data.get("eval_doc_hit"),
-        data.get("eval_mrr"),
-    ):
-        if raw is None:
-            continue
-        allowed.add(f"{raw:.3f}")
-        allowed.add(f"{raw:.2f}")
-        allowed.add(str(raw))
-    # 日期里可能有年份，放行纯年份与 1-31 日
-    for n in _extract_numbers(summary):
-        if n in allowed:
-            continue
-        if len(n) == 4 and n.startswith(("202", "201")):  # 年份
-            continue
-        if n.isdigit() and 1 <= int(n) <= 31 and len(n) <= 2:
-            continue  # 日序/序号噪声
-        return False
+    import re
+    source = bullets if bullets is not None else _structured_bullets("x", data)
+    allowed = set(re.findall(r"\d+(?:\.\d+)?", source))
+    for n in re.findall(r"\d+(?:\.\d+)?", summary or ""):
+        if n not in allowed:
+            return False
     return True
 
 
 async def _llm_summarize(bullets: str, data: dict) -> str:
-    """LLM 只润色；数字不在结构化数据中则回退原文。失败也回退。"""
+    """LLM 只润色；数字不在结构化原文中则回退。失败也回退。"""
     try:
         from services.llm_client import chat_complete
         prompt = (
@@ -177,7 +154,7 @@ async def _llm_summarize(bullets: str, data: dict) -> str:
         out = (out or "").strip()
         if not out:
             return bullets
-        if not summary_numbers_allowed(out, data):
+        if not summary_numbers_allowed(out, data, bullets=bullets):
             logger.warning("[daily_report] 摘要含数据外数字，丢弃 LLM 摘要，投递结构化原文")
             return bullets
         return out

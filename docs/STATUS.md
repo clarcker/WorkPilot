@@ -20,8 +20,11 @@
 | P5 embedding 切换 | ✅ 接口 / ⬜ 来回切验收 | 同维度 reembed API；异维度拒绝 |
 | P6 CI | ✅ fixture 已入库 | 见上表；main 缺文件则 CI 失败 |
 | P7 注入防御 | ✅ 代码 | sanitizer + 边界 prompt + schema 校验 + 对抗语料/case + 安全设计.md |
-| P1 stream 首 token 后 | ✅ 已修 | `got_first` 外提，中途断流不重试/不计入熔断；单测锁定 |
-| P9 日报数字 | ✅ 已修 | `summary_numbers_allowed` 代码校验，编数则回退结构化原文 |
+| P9 部门日报 | ✅ 后端 + 前端铃铛 | NotificationBell；数字校验收严 |
+| P1 stream 首 token 后 | ✅ 已修 | `got_first` 外提；单测锁定 |
+| P9 日报数字 | ✅ 已修 | 仅允许 bullets 中出现过的数字 |
+| queued SSE | ✅ 后端+文档 / 前端 Chat | 超时 error 系统繁忙 |
+| 报销并发锁 | ✅ | confirm/cancel/decision `FOR UPDATE`；待集成并发测 |
 | P8 演示 | ⬜ | GIF / 公开 demo / 干净 clone 待人工 |
 | 门控/judge 复核数字 | ⬜ | `run_gate_recheck` + judge×2；4 worker 选主演练待本机日志 |
 

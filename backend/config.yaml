@@ -37,9 +37,10 @@ llm_max_concurrency_local: 2
 llm_max_concurrency_external: 8
 llm_queue_timeout: 20
 llm_fallback_enabled: true
-# P2：APScheduler（PostgreSQLJobStore）
+# P2：APScheduler（PostgreSQLJobStore + advisory lock 选主）
 scheduler_enabled: true
 daily_report_hour: 9
+scheduler_timezone: Asia/Shanghai
 
 # 检索：与线上评测一致；TopK 过大会在小语料上抬高 doc_hit（天花板）
 retrieval_top_k: 5

@@ -107,6 +107,7 @@ class Settings(BaseSettings):
     # P2 调度
     scheduler_enabled: bool = True
     daily_report_hour: int = 9
+    scheduler_timezone: str = "Asia/Shanghai"
     # P4 prompt
     prompts_dir: str = "prompts"
 

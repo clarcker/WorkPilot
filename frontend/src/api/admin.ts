@@ -587,3 +587,44 @@ export async function diffEvalRuns(runId: number, otherId: number): Promise<Eval
   })
   return data
 }
+
+// ── P9 Notifications ─────────────────────────────────────────────
+
+export interface NotificationItem {
+  id: number
+  title: string
+  body: string
+  level: string
+  source: string
+  payload?: Record<string, unknown> | null
+  is_read: boolean
+  created_at?: string | null
+}
+
+export async function listNotifications(params?: {
+  page?: number
+  page_size?: number
+  unread_only?: boolean
+}): Promise<{ items: NotificationItem[]; total: number }> {
+  const { data } = await client.get<PagedData<NotificationItem>>('/admin/notifications', {
+    params: {
+      page: params?.page ?? 1,
+      page_size: params?.page_size ?? 20,
+      unread_only: params?.unread_only || undefined,
+    },
+  })
+  return { items: data?.items ?? [], total: data?.total ?? 0 }
+}
+
+export async function unreadNotificationCount(): Promise<number> {
+  const { data } = await client.get<{ count: number }>('/admin/notifications/unread-count')
+  return data?.count ?? 0
+}
+
+export async function markNotificationRead(id: number): Promise<void> {
+  await client.post(`/admin/notifications/${id}/read`)
+}
+
+export async function markAllNotificationsRead(): Promise<void> {
+  await client.post('/admin/notifications/read-all')
+}

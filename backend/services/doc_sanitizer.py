@@ -16,8 +16,10 @@ _INJECT_PATTERNS = [
     re.compile(r"(?i)override\s+(?:safety|policy|instructions)"),
     re.compile(r"忽略(?:以上|之前|上述)?(?:所有)?(?:指令|提示|规则)"),
     re.compile(r"无视(?:系统|安全)?提示"),
-    re.compile(r"你现在是"),
+    # 不再匹配宽泛的「你现在是」——会误伤「转正后你现在是正式员工」
+    re.compile(r"你现在是(?:AI|助手|模型|管理员|system)"),
     re.compile(r"不要遵守.{0,8}(?:规则|指令|限制)"),
+    re.compile(r"把(?:之前|上述)的要求放一边"),
     re.compile(r"【?系统指令】?"),
     re.compile(r"<\|im_start\|>|<\|im_end\|>|###\s*system\s*[:：]?", re.I),
 ]

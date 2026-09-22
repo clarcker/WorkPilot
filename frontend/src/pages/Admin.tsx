@@ -23,6 +23,7 @@ import EvalTab from './admin/EvalTab'
 import AuditLogsTab from './admin/AuditLogsTab'
 import SystemSettingsTab from './admin/SystemSettingsTab'
 import SystemLogsTab from './admin/SystemLogsTab'
+import NotificationBell from '../components/NotificationBell'
 
 const { Sider, Content } = Layout
 const { Text } = Typography
@@ -73,7 +74,8 @@ export default function Admin() {
       <Sider width={200} theme="light" style={{ borderRight: '1px solid #f0f0f0', flexShrink: 0 }}>
         <div style={{ padding: '14px 16px', borderBottom: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: 8 }}>
           <Button size="small" type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/')} />
-          <span style={{ fontWeight: 700, fontSize: 15 }}>管理后台</span>
+          <span style={{ fontWeight: 700, fontSize: 15, flex: 1 }}>管理后台</span>
+          <NotificationBell />
         </div>
         <Menu
           mode="inline"

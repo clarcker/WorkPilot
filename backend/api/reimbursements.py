@@ -1,10 +1,14 @@
-"""报销申请：确认 / 取消 / 我的列表 / 部门审批队列。"""
+"""报销申请：确认 / 取消 / 我的列表 / 部门审批队列。
+
+状态机写路径全部 `with_for_update` 锁申请单（与额度行），避免双击 confirm
+双扣额度、双管理员 reject 双退额度。
+"""
 from __future__ import annotations
 
 import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.audit import AuditAction, write_audit
@@ -34,6 +38,38 @@ def _get_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
+async def _lock_request(
+    db: AsyncSession,
+    request_id: int,
+    user_id: int | None = None,
+) -> ReimbursementRequest:
+    """SELECT ... FOR UPDATE 锁定申请单行。"""
+    q = select(ReimbursementRequest).where(
+        ReimbursementRequest.id == request_id
+    ).with_for_update()
+    if user_id is not None:
+        q = q.where(ReimbursementRequest.user_id == user_id)
+    row = await db.scalar(q)
+    if not row:
+        raise HTTPException(404, detail={"code": 40400, "message": "申请单不存在"})
+    return row
+
+
+async def _lock_limit(
+    db: AsyncSession,
+    user_id: int,
+    category: str,
+) -> ReimbursementLimit | None:
+    return await db.scalar(
+        select(ReimbursementLimit)
+        .where(
+            ReimbursementLimit.user_id == user_id,
+            ReimbursementLimit.category == category,
+        )
+        .with_for_update()
+    )
+
+
 @router.post("/{request_id}/confirm", response_model=BaseResp[dict])
 async def confirm_request(
     request_id: int,
@@ -41,15 +77,8 @@ async def confirm_request(
     current_user: User = Depends(get_active_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """用户确认草稿 → 进入待审批，并占用年度额度。"""
-    row = await db.scalar(
-        select(ReimbursementRequest).where(
-            ReimbursementRequest.id == request_id,
-            ReimbursementRequest.user_id == current_user.id,
-        )
-    )
-    if not row:
-        raise HTTPException(404, detail={"code": 40400, "message": "申请单不存在"})
+    """用户确认草稿 → 进入待审批，并占用年度额度。并发双击只扣一次。"""
+    row = await _lock_request(db, request_id, current_user.id)
     if row.status != "draft":
         return BaseResp.ok({
             "request_no": row.request_no,
@@ -57,13 +86,7 @@ async def confirm_request(
             "message": f"当前状态为 {row.status}，无需重复确认",
         })
 
-    # 占用额度
-    limit = await db.scalar(
-        select(ReimbursementLimit).where(
-            ReimbursementLimit.user_id == current_user.id,
-            ReimbursementLimit.category == row.category,
-        )
-    )
+    limit = await _lock_limit(db, current_user.id, row.category)
     if limit:
         if limit.used + row.amount > limit.annual_max:
             raise HTTPException(
@@ -98,25 +121,12 @@ async def cancel_request(
     current_user: User = Depends(get_active_user),
     db: AsyncSession = Depends(get_db),
 ):
-    row = await db.scalar(
-        select(ReimbursementRequest).where(
-            ReimbursementRequest.id == request_id,
-            ReimbursementRequest.user_id == current_user.id,
-        )
-    )
-    if not row:
-        raise HTTPException(404, detail={"code": 40400, "message": "申请单不存在"})
+    row = await _lock_request(db, request_id, current_user.id)
     if row.status not in ("draft", "pending"):
         raise HTTPException(400, detail={"code": 40010, "message": f"状态 {row.status} 不可取消"})
 
-    # 若已占用额度则退回
     if row.status == "pending":
-        limit = await db.scalar(
-            select(ReimbursementLimit).where(
-                ReimbursementLimit.user_id == current_user.id,
-                ReimbursementLimit.category == row.category,
-            )
-        )
+        limit = await _lock_limit(db, current_user.id, row.category)
         if limit:
             limit.used = max(0, limit.used - row.amount)
 
@@ -216,11 +226,7 @@ async def decide_request(
     current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    row = await db.scalar(
-        select(ReimbursementRequest).where(ReimbursementRequest.id == request_id)
-    )
-    if not row:
-        raise HTTPException(404, detail={"code": 40400, "message": "申请单不存在"})
+    row = await _lock_request(db, request_id)
     if current_user.role == UserRole.dept_admin and row.dept_id != current_user.dept_id:
         raise HTTPException(403, detail={"code": 40301, "message": "无权审批其他部门的申请"})
     if row.status != "pending":
@@ -231,14 +237,8 @@ async def decide_request(
     row.approver_comment = body.comment
     row.decided_at = datetime.datetime.now(datetime.timezone.utc)
 
-    # 驳回退回额度
     if not body.approved:
-        limit = await db.scalar(
-            select(ReimbursementLimit).where(
-                ReimbursementLimit.user_id == row.user_id,
-                ReimbursementLimit.category == row.category,
-            )
-        )
+        limit = await _lock_limit(db, row.user_id, row.category)
         if limit:
             limit.used = max(0, limit.used - row.amount)
 

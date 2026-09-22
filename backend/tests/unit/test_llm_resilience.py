@@ -170,17 +170,20 @@ class TestChatStreamNoRetryAfterFirstToken:
 
 class TestDailyReportNumbers:
     def test_reject_fabricated_number(self):
-        from services.daily_report import summary_numbers_allowed
+        from services.daily_report import summary_numbers_allowed, _structured_bullets
         data = {
-            "qa_total": 12, "qa_down": 2,
+            "qa_total": 5, "qa_down": 2,
             "pending_reimb": 3, "pending_reimb_over_48h": 0,
             "pending_tickets": 1, "pending_tickets_over_48h": 0,
             "gaps": [{"query": "x", "count": 2}],
             "eval_run_id": 13, "eval_doc_hit": 0.844, "eval_mrr": 0.669,
             "eval_alert": None,
         }
-        assert summary_numbers_allowed("昨日问答 12 条，👎 2 条，待审批 3", data) is True
-        assert summary_numbers_allowed("昨日问答 99 条", data) is False
+        bullets = _structured_bullets("研发部", data)
+        assert summary_numbers_allowed("昨日问答 5 条，待审批 3", data, bullets=bullets) is True
+        # pending 3 写成 12：12 不在 bullets → 拒绝
+        assert summary_numbers_allowed("昨日问答 5 条，待审批 12", data, bullets=bullets) is False
+        assert summary_numbers_allowed("昨日问答 99 条", data, bullets=bullets) is False
 
 
 class TestToolSchemaValidate:

@@ -120,6 +120,8 @@ uv add <package>               # 添加依赖
 
 ```
 data: {"type": "conversation_id", "content": "123"}
+data: {"type": "queued", "content": {"position": 2}}
+data: {"type": "queued", "content": {"position": 2}}
 data: {"type": "token", "content": "..."}
 data: {"type": "sources", "content": [...]}
 data: {"type": "tool_call", "content": {"tool_name": "...", "tool_args": {...}, "allowed": true, "result": ..., "latency_ms": 0, "requires_confirmation": false, "missing_slots": null}}
@@ -129,6 +131,7 @@ data: {"type": "done", "content": ""}
 data: {"type": "error", "content": "错误信息"}
 ```
 
+- `queued`：LLM 并发槽位等待时推送 `{"position": n}`；等待超 `llm_queue_timeout` 后跟 `error: 系统繁忙`
 - `confirm_required`：写操作生成草稿后推送，前端渲染确认卡；确认调 `POST /api/reimbursements/{id}/confirm`，取消调 `cancel`
 - `form_incomplete`：槽位缺失，前端提示补充字段后用户继续对话
 
