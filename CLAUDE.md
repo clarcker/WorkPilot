@@ -121,7 +121,6 @@ uv add <package>               # 添加依赖
 ```
 data: {"type": "conversation_id", "content": "123"}
 data: {"type": "queued", "content": {"position": 2}}
-data: {"type": "queued", "content": {"position": 2}}
 data: {"type": "token", "content": "..."}
 data: {"type": "sources", "content": [...]}
 data: {"type": "tool_call", "content": {"tool_name": "...", "tool_args": {...}, "allowed": true, "result": ..., "latency_ms": 0, "requires_confirmation": false, "missing_slots": null}}
