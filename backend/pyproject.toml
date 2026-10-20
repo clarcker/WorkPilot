@@ -34,6 +34,10 @@ dependencies = [
     "loguru>=0.7.0",
     "rapidocr-onnxruntime>=1.4.4",
     "pypdfium2>=5.9.0",
+    "pyyaml>=6.0.3",
+    "jieba>=0.42.1",
+    "apscheduler>=3.10.4",
+    "psycopg2-binary>=2.9.9",
 ]
 
 [project.optional-dependencies]

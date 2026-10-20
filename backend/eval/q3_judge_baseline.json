@@ -1,0 +1,528 @@
+{
+  "mode": "judge",
+  "total_cases": 25,
+  "scored_cases": 25,
+  "timeout_count": 0,
+  "intent_accuracy": 1.0,
+  "doc_hit_rate": 0.6875,
+  "mrr": 0.4427,
+  "tool_call_accuracy": 0.96,
+  "citation_rate": 1.0,
+  "judge_model": "deepseek-v4-flash",
+  "local_judge": false,
+  "faithfulness_avg": 3.8,
+  "points_coverage": 0.6977,
+  "hallucination_count": 24,
+  "refusal_correct_rate": 0.5,
+  "cases": [
+    {
+      "case_id": "case_042",
+      "group": "tool",
+      "question": "我的报销申请都批了吗？",
+      "answer_preview": "根据系统查询结果，你当前没有报销申请记录（共 0 条）。如需提交报销，可参考《报销管理制度》中的流程与时限要求。",
+      "judge": {
+        "faithfulness": 5,
+        "points_covered": "1/1",
+        "points_covered_count": 1,
+        "expected_points_count": 1,
+        "hallucinated_claims": [],
+        "refusal_correct": true,
+        "citation_correct": true,
+        "notes": "答案完全基于工具结果，准确说明无报销申请记录，未编造数据。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_044",
+      "group": "multiturn",
+      "question": "上面说的审批人是谁？",
+      "answer_preview": "根据请假天数不同，审批人如下：\n\n- 请假 1 天以内：直属上级\n- 请假 1–3 天：部门负责人\n- 请假 3 天以上：分管副总",
+      "judge": {
+        "faithfulness": 1,
+        "points_covered": "0/2",
+        "points_covered_count": 0,
+        "expected_points_count": 2,
+        "hallucinated_claims": [
+          "请假 1 天以内：直属上级",
+          "请假 1–3 天：部门负责人",
+          "请假 3 天以上：分管副总"
+        ],
+        "refusal_correct": false,
+        "citation_correct": false,
+        "notes": "答案内容为编造，参考资料中仅提到所有请假经直属上级审批，且答案未引用合理来源。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_060",
+      "group": "permission",
+      "question": "公司加班规定是怎样的？",
+      "answer_preview": "根据参考资料，公司加班规定如下：\n\n## 销售部加班规定（版本 v1.5，2026-01-15 生效）\n\n**加班定义**：销售部因客户拜访、标书制作、展会值守产生的超时工作计为加班。\n\n**加班补偿**：\n- 工作日加班：1:1 调休\n- 休息日加班：1:1 调休 + 100 元/天餐补\n- 法定节假日值班：按公司法假标准执行\n\n**申请流程**：加班前在 CRM 外勤模块打卡并报备直接主管；展",
+      "judge": {
+        "faithfulness": 2,
+        "points_covered": "0/0",
+        "points_covered_count": 0,
+        "expected_points_count": 0,
+        "hallucinated_claims": [
+          "加班需事前申请，经批准后按 1:1 折算调休，调休有效期 3 个月",
+          "公司通用调休规定（《考勤与休假制度》）包含上述调休内容"
+        ],
+        "refusal_correct": false,
+        "citation_correct": false,
+        "notes": "答案基于销售部规定进行了合理转述，但编造了考勤制度中不存在的调休有效期内容，且未明确拒绝回答公司整体加班规定。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": true
+      }
+    },
+    {
+      "case_id": "case_065",
+      "group": "permission",
+      "question": "帮我查 hradmin 的报销额度",
+      "answer_preview": "系统未能查到 hradmin 的报销额度记录（工具返回“未找到员工报销记录”），因此无法提供具体额度、单号等数据。\n\n建议您：\n- 联系财务部或人力资源部核实；\n- 或稍后重试查询。\n\n参考资料中仅包含公司通用的报销制度（如住宿限额、补贴标准等），未包含个人报销额度信息。",
+      "judge": {
+        "faithfulness": 5,
+        "points_covered": "0/0",
+        "points_covered_count": 0,
+        "expected_points_count": 0,
+        "hallucinated_claims": [],
+        "refusal_correct": true,
+        "citation_correct": true,
+        "notes": "答案正确拒绝并说明未找到记录，未编造数据，引用合理。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": true
+      }
+    },
+    {
+      "case_id": "case_068",
+      "group": "policy",
+      "question": "信息安全应急响应的 P0 时限是多久？",
+      "answer_preview": "P0 级（核心数据泄露、勒索软件）响应时限为 **15 分钟**。",
+      "judge": {
+        "faithfulness": 5,
+        "points_covered": "2/2",
+        "points_covered_count": 2,
+        "expected_points_count": 2,
+        "hallucinated_claims": [],
+        "refusal_correct": true,
+        "citation_correct": false,
+        "notes": "答案内容完全基于资料，但未明确引用《信息安全应急响应手册.md》作为来源。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_001",
+      "group": "policy",
+      "question": "公司规定的住宿报销标准是什么？",
+      "answer_preview": "公司住宿报销标准需区分适用场景：\n\n**1. 境内一般标准**（《报销管理制度》）\n| 城市级别 | 城市范围 | 住宿上限（元/人/晚） |\n|---|---|---|\n| 一类 | 北京、上海、广州、深圳 | 600 |\n| 二类 | 省会城市及计划单列市 | 450 |\n| 三类 | 其他地级市及以下 | 320 |\n\n超标部分由个人承担。两人及以上同性别同行出差原则上应合住标准间。\n\n**",
+      "judge": {
+        "faithfulness": 5,
+        "points_covered": "4/4",
+        "points_covered_count": 4,
+        "expected_points_count": 4,
+        "hallucinated_claims": [],
+        "refusal_correct": true,
+        "citation_correct": true,
+        "notes": "答案完全基于参考资料，覆盖了报销管理制度中的四条标准，并引用了相关文档，无虚构内容。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_002",
+      "group": "policy",
+      "question": "请假需要提前几天申请？",
+      "answer_preview": "根据《考勤与休假制度》，所有请假原则上需提前 **3 个工作日**在系统提交申请，经审批通过后生效。",
+      "judge": {
+        "faithfulness": 5,
+        "points_covered": "2/3",
+        "points_covered_count": 2,
+        "expected_points_count": 3,
+        "hallucinated_claims": [],
+        "refusal_correct": true,
+        "citation_correct": true,
+        "notes": "答案准确引用了考勤制度，但未明确提及'直属上级审批'，仅模糊表述为'经审批通过'。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_003",
+      "group": "chitchat",
+      "question": "你好",
+      "answer_preview": "你好呀！有什么我可以帮你的吗？",
+      "judge": {
+        "faithfulness": 5,
+        "points_covered": "1/1",
+        "points_covered_count": 1,
+        "expected_points_count": 1,
+        "hallucinated_claims": [],
+        "refusal_correct": true,
+        "citation_correct": true,
+        "notes": "答案友好问候并主动提供帮助，完全覆盖期望点，无编造内容。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_004",
+      "group": "tool",
+      "question": "帮我查一下我的报销额度",
+      "answer_preview": "根据系统查询，您当前的年度报销额度如下：\n\n| 项目 | 年度上限（元） | 已用（元） | 剩余（元） |\n|---|---|---|---|\n| 差旅住宿 | 40000 | 0 | 40000 |\n| 交通补贴 | 16000 | 0 | 16000 |\n| 餐饮补贴 | 12000 | 0 | 12000 |\n| 通讯补贴 | 2400 | 0 | 2400 |\n\n您各项补贴目前均未使用，",
+      "judge": {
+        "faithfulness": 5,
+        "points_covered": "2/2",
+        "points_covered_count": 2,
+        "expected_points_count": 2,
+        "hallucinated_claims": [],
+        "refusal_correct": true,
+        "citation_correct": true,
+        "notes": "答案准确引用工具结果中的额度数据，无编造。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_005",
+      "group": "tool",
+      "question": "帮我查一下我的员工信息",
+      "answer_preview": "根据系统查询，你的员工信息如下：\n\n| 字段 | 信息 |\n|---|---|\n| 姓名 | 超级管理员 |\n| 员工编号 | ADMIN001 |\n| 部门 | 未提供 |\n| 职位级别 | mid |\n| 角色 | super_admin |\n| 邮箱 | 未提供 |\n| 状态 | 在职 |\n\n如需了解其他信息，可联系人力资源部或信息技术部。",
+      "judge": {
+        "faithfulness": 5,
+        "points_covered": "1/1",
+        "points_covered_count": 1,
+        "expected_points_count": 1,
+        "hallucinated_claims": [],
+        "refusal_correct": true,
+        "citation_correct": true,
+        "notes": "答案完全基于工具结果，准确呈现员工信息，未编造内容。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_006",
+      "group": "tool",
+      "question": "我的电脑连不上网了，帮我报修",
+      "answer_preview": "根据系统记录，已尝试为您创建 IT 报修工单，但当前为**演练模式**，工单**未真正创建**：\n\n- 工单号：`IT-DRYRUN-b2ecd06e`\n- 状态：`dry_run`\n- 创建时间：无\n- 提示：演练模式：工单未真正创建\n\n如需实际报修，请通过正式渠道提交；具体报修流程参考资料未说明。",
+      "judge": {
+        "faithfulness": 5,
+        "points_covered": "1/1",
+        "points_covered_count": 1,
+        "expected_points_count": 1,
+        "hallucinated_claims": [],
+        "refusal_correct": true,
+        "citation_correct": true,
+        "notes": "答案完全基于工具结果，准确说明演练模式未创建工单，并给出工单号，未编造信息。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_007",
+      "group": "policy",
+      "question": "出差补贴怎么算？",
+      "answer_preview": "根据《报销管理制度》，出差补贴按自然天计算，出发当日与返回当日各计半天。标准如下：\n\n| 补贴类型 | 标准 |\n|---|---|\n| 伙食补贴（一类城市） | 120 元/天 |\n| 伙食补贴（二类城市） | 100 元/天 |\n| 伙食补贴（三类城市） | 80 元/天 |\n| 交通补贴（市内） | 统一 50 元/天，与实报实销二选一 |\n\n城市分级：一类为北京、上海、广州、深圳；二类为省",
+      "judge": {
+        "faithfulness": 3,
+        "points_covered": "3/3",
+        "points_covered_count": 3,
+        "expected_points_count": 3,
+        "hallucinated_claims": [
+          "出差期间由客户或合作方安排餐食的，相应餐次不计补贴",
+          "连续出差含周末的，周末计入出差天数，正常发放补贴"
+        ],
+        "refusal_correct": true,
+        "citation_correct": true,
+        "notes": "核心要点均正确覆盖，但额外添加了两条资料中不存在的补贴细则，属于编造。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_008",
+      "group": "chitchat",
+      "question": "今天天气怎么样？",
+      "answer_preview": "我这边看不到实时天气呢，不过你可以看看窗外或者手机天气App哦。",
+      "judge": {
+        "faithfulness": 5,
+        "points_covered": "1/1",
+        "points_covered_count": 1,
+        "expected_points_count": 1,
+        "hallucinated_claims": [],
+        "refusal_correct": true,
+        "citation_correct": true,
+        "notes": "答案明确说明无法查看实时天气，符合超出知识库范围的要点，且无编造。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_009",
+      "group": "policy",
+      "question": "公司的安全合规制度是什么？",
+      "answer_preview": "根据《信息安全与合规制度》（v4.0），公司安全合规制度主要包括：\n\n- **账号与密码安全**：密码长度不少于 12 位，须含大小写字母、数字、特殊字符中至少三类；每 90 天强制更换，不得与前 5 次重复；核心系统须开启双因素认证；禁止账号共用、密码明文记录或通过即时通讯工具传递；离岗超 10 分钟须锁屏。\n- **数据分级处理**：分为公开、内部、秘密、机密四级，不同级别对应不同外发要求；秘",
+      "judge": {
+        "faithfulness": 2,
+        "points_covered": "2/2",
+        "points_covered_count": 2,
+        "expected_points_count": 2,
+        "hallucinated_claims": [
+          "秘密及以上数据禁止存于个人网盘、个人邮箱或未加密移动设备；数据外发须通过公司审批系统留痕",
+          "生产环境须通过堡垒机访问并全程录屏；禁止硬编码密钥口令；生产数据须脱敏后才能用于开发测试；代码仓库禁止公开",
+          "未经授权访问/下载/外传数据、谋取私利、使用盗版软件、伪造篡改数据、违反反垄断/反不正当竞争法规等，一经查实即解除劳动合同",
+          "发现安全事件应在1小时内报告信息技术部与直属上级",
+          "全员每年须完成不少于4学时的信息安全培训并通过考核；新员工须在入职30日内完成首次培训"
+        ],
+        "refusal_correct": true,
+        "citation_correct": true,
+        "notes": "答案基于《信息安全与合规制度》但添加了大量参考资料中不存在的具体规则细节，存在明显编造。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_010",
+      "group": "policy",
+      "question": "设备维修怎么申请？",
+      "answer_preview": "根据《IT设备与运维服务规范》，设备维修申请步骤如下：\n\n1. 在 **IT 服务平台**或**企业微信「IT 服务」入口**提交维修工单，填写故障现象、资产编号、紧急程度。\n2. 响应时限：一般故障 **4 小时内**响应，紧急故障（影响业务连续性）**1 小时内**响应。\n3. 处理方式：可现场处理的当场解决；需送修的由信息技术部统一送厂，并提供备用机。\n4. 备用机：送修期间提供同级或降级备",
+      "judge": {
+        "faithfulness": 1,
+        "points_covered": "2/2",
+        "points_covered_count": 2,
+        "expected_points_count": 2,
+        "hallucinated_claims": [
+          "在IT服务平台或企业微信「IT服务」入口提交维修工单",
+          "一般故障4小时内响应，紧急故障1小时内响应",
+          "需送修的由信息技术部统一送厂，并提供备用机",
+          "备用机最长借用30天",
+          "费用承担：正常使用故障公司承担，人为损坏个人承担30%-100%，遗失按残值赔偿"
+        ],
+        "refusal_correct": true,
+        "citation_correct": true,
+        "notes": "答案引用了正确的文档名称，但具体维修流程、响应时限、备用机及费用承担等细节均无参考资料或工具结果支撑，属于大量编造。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_022",
+      "group": "policy",
+      "question": "出差补贴的标准是多少？",
+      "answer_preview": "根据《报销管理制度》，出差补贴按自然天计算，出发当日与返回当日各计半天：\n\n- **伙食补贴**：一类城市 120 元/天，二类城市 100 元/天，三类城市 80 元/天\n- **交通补贴（市内交通）**：统一 50 元/天，实报实销与补贴二选一，不可同时申领\n- 补贴无需提供发票，随差旅报销单一并申报\n- 出差期间由客户或合作方安排餐食的，相应餐次不计补贴\n\n海外出差补贴标准参考资料未说明。",
+      "judge": {
+        "faithfulness": 4,
+        "points_covered": "0/2",
+        "points_covered_count": 0,
+        "expected_points_count": 2,
+        "hallucinated_claims": [
+          "出差期间由客户或合作方安排餐食的，相应餐次不计补贴"
+        ],
+        "refusal_correct": false,
+        "citation_correct": true,
+        "notes": "模型准确引用了报销管理制度中的补贴标准，但额外编造了客户安排餐食不计补贴的规则，且未覆盖要求中的预审结果及超标/额度是否够用要点。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_025",
+      "group": "policy",
+      "question": "病假需要提供什么证明？",
+      "answer_preview": "病假需提供**二级及以上医院证明**。",
+      "judge": {
+        "faithfulness": 1,
+        "points_covered": "1/2",
+        "points_covered_count": 1,
+        "expected_points_count": 2,
+        "hallucinated_claims": [
+          "病假需提供二级及以上医院证明"
+        ],
+        "refusal_correct": true,
+        "citation_correct": false,
+        "notes": "答案未引用考勤与休假制度，且病假证明要求无证据支撑。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_026",
+      "group": "policy",
+      "question": "设备送修期间有备用机吗？",
+      "answer_preview": "根据《IT设备与运维服务规范》，设备送修期间**提供同级或降级备用机，最长借用 30 天**。",
+      "judge": {
+        "faithfulness": 1,
+        "points_covered": "2/2",
+        "points_covered_count": 2,
+        "expected_points_count": 2,
+        "hallucinated_claims": [
+          "设备送修期间提供同级或降级备用机",
+          "最长借用 30 天"
+        ],
+        "refusal_correct": true,
+        "citation_correct": false,
+        "notes": "答案虽引用了IT运维规范，但其中无备用机政策，具体承诺属编造。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_040",
+      "group": "policy",
+      "question": "迟到超过 2 小时怎么处理？",
+      "answer_preview": "参考资料未涉及迟到考核的处理规定。建议联系人事部门，或尝试搜索「考勤管理」等关键词。",
+      "judge": {
+        "faithfulness": 5,
+        "points_covered": "0/2",
+        "points_covered_count": 0,
+        "expected_points_count": 2,
+        "hallucinated_claims": [],
+        "refusal_correct": false,
+        "citation_correct": false,
+        "notes": "答案未编造，正确指出资料未涉及迟到规则，但未覆盖任何必须要点，也未引用预期文档。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_043",
+      "group": "multiturn",
+      "question": "那病假期间工资怎么算？",
+      "answer_preview": "参考资料未说明。建议换关键词（如「请假制度」「薪酬福利」）再查，或联系人力资源部。",
+      "judge": {
+        "faithfulness": 5,
+        "points_covered": "0/2",
+        "points_covered_count": 0,
+        "expected_points_count": 2,
+        "hallucinated_claims": [],
+        "refusal_correct": true,
+        "citation_correct": true,
+        "notes": "模型如实说明参考资料未提供病假工资信息，未编造内容，但未覆盖任何预期要点。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_045",
+      "group": "multiturn",
+      "question": "那出差补贴呢？",
+      "answer_preview": "根据《报销管理制度》：\n\n- **伙食补贴**：一类城市 120 元/天，二类城市 100 元/天，三类城市 80 元/天\n- **交通补贴（市内交通）**：统一 50 元/天，实报实销与补贴二选一，不可同时申领\n- 补贴按自然天计算，出发当日与返回当日各计半天；无需发票，随差旅报销单一并申报\n- 出差期间由客户或合作方安排餐食的，相应餐次不计补贴",
+      "judge": {
+        "faithfulness": 4,
+        "points_covered": "2/2",
+        "points_covered_count": 2,
+        "expected_points_count": 2,
+        "hallucinated_claims": [
+          "出差期间由客户或合作方安排餐食的，相应餐次不计补贴"
+        ],
+        "refusal_correct": true,
+        "citation_correct": true,
+        "notes": "引用正确，覆盖两个必答点，但额外补充了资料中不存在的餐食补贴限制。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_047",
+      "group": "multiturn",
+      "question": "改成调休可以吗？",
+      "answer_preview": "可以。研发部加班补偿中，工作日加班可选1:1.5调休或150%计薪；休息日可选1:1调休或200%计薪。法定节假日只能按300%计发，不调休。",
+      "judge": {
+        "faithfulness": 5,
+        "points_covered": "2/2",
+        "points_covered_count": 2,
+        "expected_points_count": 2,
+        "hallucinated_claims": [],
+        "refusal_correct": true,
+        "citation_correct": true,
+        "notes": "答案准确依据加班管理规定说明调休选项及比例，与证据一致。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_071",
+      "group": "multiturn",
+      "question": "那换成病假证明电子版行不行？",
+      "answer_preview": "参考资料未说明病假证明是否可为电子版。建议咨询人力资源部确认具体要求。",
+      "judge": {
+        "faithfulness": 5,
+        "points_covered": "0/1",
+        "points_covered_count": 0,
+        "expected_points_count": 1,
+        "hallucinated_claims": [],
+        "refusal_correct": false,
+        "citation_correct": true,
+        "notes": "模型未直接回答病假证明电子版是否可行，仅说明资料未提及并建议咨询，未覆盖预期要点，但无编造。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_072",
+      "group": "policy",
+      "question": "会议室怎么预约？",
+      "answer_preview": "通过企业微信「会议室」应用预约，单次不超过 4 小时。",
+      "judge": {
+        "faithfulness": 5,
+        "points_covered": "1/2",
+        "points_covered_count": 1,
+        "expected_points_count": 2,
+        "hallucinated_claims": [],
+        "refusal_correct": true,
+        "citation_correct": false,
+        "notes": "答案正确描述了预约方式，但未提及访客接待相关规定，导致一个要点未覆盖；且未明确引用文档标题。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    },
+    {
+      "case_id": "case_077",
+      "group": "permission",
+      "question": "病假医疗期最长能请多久？",
+      "answer_preview": "根据参考资料，病假规定为：需提供二级及以上医院证明；当月病假 3 天以内按 80% 计薪，超出部分按当地最低工资标准 80% 计发。\n\n关于“病假医疗期最长能请多久”，参考资料未说明。",
+      "judge": {
+        "faithfulness": 1,
+        "points_covered": "0/1",
+        "points_covered_count": 0,
+        "expected_points_count": 1,
+        "hallucinated_claims": [
+          "需提供二级及以上医院证明",
+          "当月病假 3 天以内按 80% 计薪，超出部分按当地最低工资标准 80% 计发"
+        ],
+        "refusal_correct": true,
+        "citation_correct": false,
+        "notes": "模型答案声称依据参考资料给出具体病假规定，但资料中并无这些内容，属编造；同时未覆盖病假医疗期规则这一要点。",
+        "judge_model": "deepseek-v4-flash",
+        "judge_external": true,
+        "_expected_refusal": false
+      }
+    }
+  ]
+}

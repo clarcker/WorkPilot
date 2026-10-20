@@ -26,10 +26,11 @@ from schemas.common import BaseResp
 router = APIRouter()
 
 # 允许通过 API 修改的配置键白名单及类型说明
+# 键名与 system_config 表 / alembic 种子数据保持一致
 _ALLOWED_KEYS: dict[str, dict] = {
-    "max_conversations_per_user":    {"default": 200,  "label": "每用户最大会话数"},
-    "max_messages_per_conversation": {"default": 500,  "label": "每会话最大消息数"},
-    "archive_retention_days":        {"default": 180,  "label": "归档数据保留天数"},
+    "max_sessions_per_user":    {"default": 200,  "label": "每用户最大会话数"},
+    "max_messages_per_session": {"default": 500,  "label": "每会话最大消息数"},
+    "archive_retention_days":   {"default": 180,  "label": "归档数据保留天数"},
 }
 
 

@@ -85,6 +85,7 @@ class AuditAction:
     DOC_ARCHIVE         = "doc.archive"
     DOC_DELETE          = "doc.delete"
     DOC_PERM_UPDATE     = "doc.permission_update"
+    DOC_LIFECYCLE       = "doc.lifecycle_update"
 
     # 系统配置
     SYSTEM_CONFIG       = "system.config_update"

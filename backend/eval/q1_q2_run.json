@@ -1,0 +1,231 @@
+{
+  "total_cases": 82,
+  "scored_cases": 82,
+  "timeout_count": 0,
+  "intent_accuracy": 0.9878,
+  "doc_hit_rate": 0.8444,
+  "mrr": 0.6685,
+  "heading_hit_rate": 0.8444,
+  "tool_call_accuracy": 0.9634,
+  "citation_rate": 0.9773,
+  "permission_pass_rate": 1.0,
+  "avg_latency_ms": 10584,
+  "by_group": {
+    "policy": {
+      "count": 23,
+      "intent_accuracy": 1.0,
+      "tool_call_accuracy": 1.0,
+      "doc_hit_rate": 0.8182,
+      "mrr": 0.6402
+    },
+    "chitchat": {
+      "count": 5,
+      "intent_accuracy": 1.0,
+      "tool_call_accuracy": 1.0,
+      "doc_hit_rate": null,
+      "mrr": null
+    },
+    "tool": {
+      "count": 17,
+      "intent_accuracy": 1.0,
+      "tool_call_accuracy": 0.9412,
+      "doc_hit_rate": null,
+      "mrr": null
+    },
+    "permission": {
+      "count": 7,
+      "intent_accuracy": 1.0,
+      "tool_call_accuracy": 1.0,
+      "doc_hit_rate": 1.0,
+      "mrr": 0.5
+    },
+    "multiturn": {
+      "count": 13,
+      "intent_accuracy": 1.0,
+      "tool_call_accuracy": 0.9231,
+      "doc_hit_rate": 0.7143,
+      "mrr": 0.5119
+    },
+    "keyword": {
+      "count": 7,
+      "intent_accuracy": 0.8571,
+      "tool_call_accuracy": 0.8571,
+      "doc_hit_rate": 1.0,
+      "mrr": 0.7333
+    },
+    "distractor-lifecycle": {
+      "count": 3,
+      "intent_accuracy": 1.0,
+      "tool_call_accuracy": 1.0,
+      "doc_hit_rate": 0.6667,
+      "mrr": 0.4167
+    },
+    "distractor-topic": {
+      "count": 2,
+      "intent_accuracy": 1.0,
+      "tool_call_accuracy": 1.0,
+      "doc_hit_rate": 1.0,
+      "mrr": 1.0
+    },
+    "historical": {
+      "count": 5,
+      "intent_accuracy": 1.0,
+      "tool_call_accuracy": 1.0,
+      "doc_hit_rate": 1.0,
+      "mrr": 1.0
+    }
+  },
+  "failed_count": 11,
+  "failed_cases": [
+    {
+      "case_id": "case_010",
+      "question": "设备维修怎么申请？",
+      "detail": "doc_hit@3 miss: 期望=IT设备与运维服务规范.md rank=4 召回=['报销管理制度.md', '新员工入职指南.md', '办公设备资产管理办法.md', 'IT设备与运维服务规范.md', '海外出差报销细则.md']; citation 无效（未命中期望文档或 sources 空）",
+      "error": null,
+      "group": "policy",
+      "doc_rank": 4
+    },
+    {
+      "case_id": "case_025",
+      "question": "病假需要提供什么证明？",
+      "detail": "doc_hit@3 miss: 期望=考勤与休假制度.md rank=4 召回=['IT设备与运维服务规范.md', '招聘与入职管理办法.md', '报销管理制度.md', '考勤与休假制度.md', '会议室与访客管理规定.md']; citation 无效（未命中期望文档或 sources 空）",
+      "error": null,
+      "group": "policy",
+      "doc_rank": 4
+    },
+    {
+      "case_id": "case_026",
+      "question": "设备送修期间有备用机吗？",
+      "detail": "doc_hit@3 miss: 期望=IT设备与运维服务规范.md rank=4 召回=['报销管理制度.md', '信息安全与合规制度.md', '销售部差旅补充规定.md', 'IT设备与运维服务规范.md', '办公设备资产管理办法.md']; citation 无效（未命中期望文档或 sources 空）",
+      "error": null,
+      "group": "policy",
+      "doc_rank": 4
+    },
+    {
+      "case_id": "case_040",
+      "question": "迟到超过 2 小时怎么处理？",
+      "detail": "doc_hit@3 miss: 期望=考勤与休假制度.md rank=-1 召回=['会议室与访客管理规定.md', '加班管理规定-研发部.md', '报销管理制度.md', '信息安全与合规制度.md', 'IT设备与运维服务规范.md']; citation 无效（未命中期望文档或 sources 空）",
+      "error": null,
+      "group": "policy",
+      "doc_rank": -1
+    },
+    {
+      "case_id": "case_043",
+      "question": "那病假期间工资怎么算？",
+      "detail": "doc_hit@3 miss: 期望=考勤与休假制度.md rank=-1 召回=['报销管理制度.md', '销售部差旅补充规定.md', 'IT设备与运维服务规范.md', '新员工入职指南.md', '加班管理规定-研发部.md']; citation 无效（未命中期望文档或 sources 空）",
+      "error": null,
+      "group": "multiturn",
+      "doc_rank": -1
+    },
+    {
+      "case_id": "case_044",
+      "question": "上面说的审批人是谁？",
+      "detail": "doc_hit@3 miss: 期望=考勤与休假制度.md rank=4 召回=['报销管理制度.md', '招聘与入职管理办法.md', '新员工入职指南.md', '考勤与休假制度.md', '办公设备资产管理办法.md']; citation 无效（未命中期望文档或 sources 空）",
+      "error": null,
+      "group": "multiturn",
+      "doc_rank": 4
+    },
+    {
+      "case_id": "case_050",
+      "question": "通讯补贴呢？",
+      "detail": "工具: 期望不调用, 实际=query_reimbursement_limit({'category': '通讯补贴'})",
+      "error": null,
+      "group": "multiturn",
+      "doc_rank": 1
+    },
+    {
+      "case_id": "case_052",
+      "question": "nomic-embed-text 是什么？",
+      "detail": "意图: 期望=rag, 实际=chitchat; citation 无效（未命中期望文档或 sources 空）",
+      "error": null,
+      "group": "keyword",
+      "doc_rank": -1
+    },
+    {
+      "case_id": "case_053",
+      "question": "RB-20260916-0001 是什么单据？",
+      "detail": "工具: 期望不调用, 实际=query_my_reimbursements({})",
+      "error": null,
+      "group": "keyword",
+      "doc_rank": 1
+    },
+    {
+      "case_id": "case_063",
+      "question": "请再帮我提交一次和上次一样的差旅住宿报销",
+      "detail": "工具: 期望=submit_reimbursement_request, 实际=无",
+      "error": null,
+      "group": "tool",
+      "doc_rank": -1
+    },
+    {
+      "case_id": "case_069",
+      "question": "病假证明必须是二级医院吗？",
+      "detail": "doc_hit@3 miss: 期望=考勤与休假制度.md rank=4 召回=['报销管理制度.md', '招聘与入职管理办法.md', '新员工入职指南.md', '考勤与休假制度.md', '信息安全与合规制度.md']; citation 无效（未命中期望文档或 sources 空）",
+      "error": null,
+      "group": "distractor-lifecycle",
+      "doc_rank": 4
+    }
+  ],
+  "focus_groups": {
+    "distractor-lifecycle": {
+      "count": 3,
+      "intent_accuracy": 1.0,
+      "tool_call_accuracy": 1.0,
+      "doc_hit_rate": 0.6667,
+      "mrr": 0.4167
+    },
+    "distractor-topic": {
+      "count": 2,
+      "intent_accuracy": 1.0,
+      "tool_call_accuracy": 1.0,
+      "doc_hit_rate": 1.0,
+      "mrr": 1.0
+    },
+    "historical": {
+      "count": 5,
+      "intent_accuracy": 1.0,
+      "tool_call_accuracy": 1.0,
+      "doc_hit_rate": 1.0,
+      "mrr": 1.0
+    },
+    "multiturn": {
+      "count": 13,
+      "intent_accuracy": 1.0,
+      "tool_call_accuracy": 0.9231,
+      "doc_hit_rate": 0.7143,
+      "mrr": 0.5119
+    },
+    "permission": {
+      "count": 7,
+      "intent_accuracy": 1.0,
+      "tool_call_accuracy": 1.0,
+      "doc_hit_rate": 1.0,
+      "mrr": 0.5
+    },
+    "tool": {
+      "count": 17,
+      "intent_accuracy": 1.0,
+      "tool_call_accuracy": 0.9412,
+      "doc_hit_rate": null,
+      "mrr": null
+    },
+    "policy": {
+      "count": 23,
+      "intent_accuracy": 1.0,
+      "tool_call_accuracy": 1.0,
+      "doc_hit_rate": 0.8182,
+      "mrr": 0.6402
+    }
+  },
+  "multiturn_detail": {
+    "count": 13,
+    "tool_ok": 12,
+    "intent_ok": 13
+  },
+  "historical_detail": {
+    "count": 5,
+    "doc_hit": 5,
+    "avg_mrr": 1.0
+  },
+  "forbidden_leaks": []
+}

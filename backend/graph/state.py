@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any, Optional
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 
 class HistoryMessage(TypedDict):
@@ -25,12 +25,14 @@ class RAGState(TypedDict):
     user_role:        str            # "super_admin" | "dept_admin" | "employee"
     user_dept_id:     Optional[int]
     conversation_history: list[HistoryMessage]  # 最近 N 轮历史（不含当前问题）
+    conversation_id:  NotRequired[Optional[int]]  # 会话 ID，供工具决策读本会话 tool_calls
 
     # ── 脱敏节点输出 ───────────────────────────────
     anonymized_query: str
 
     # ── 意图分类节点输出 ───────────────────────────
     intent: str    # "rag" | "chitchat"
+    time_scope: NotRequired[Optional[str]]  # "current" | "historical"（Q1）
 
     # ── 检索节点输出 ───────────────────────────────
     retrieved_chunks: list[dict]   # RetrievedChunk TypedDict 列表
@@ -48,7 +50,35 @@ class RAGState(TypedDict):
     tool_args:       dict             # LLM 生成的工具参数
     tool_result:     Optional[dict]   # 工具执行结果
     permission_denied: Optional[str]  # 权限拒绝原因
-    trace:           list[dict]       # 每个节点的执行追踪
+    trace:            list[dict]      # 每个节点的执行追踪
+
+    # 工具执行结果标记（由 execute_tool_node 写入，供评测断言使用）
+    tool_success: NotRequired[Optional[bool]]  # None=未调用工具
+    tool_error:   NotRequired[Optional[str]]   # 执行失败/权限拒绝的原因
+
+    # ── 多步工具循环 ─────────────────────────────────
+    tool_step:       NotRequired[int]           # 已执行工具次数
+    tool_history:    NotRequired[list[dict]]    # [{name,args,result,success}] 本轮
+    max_tool_steps:  NotRequired[int]           # 默认 4
+    # 本会话（跨轮）已执行过的工具摘要，Q2 多轮工具决策
+    session_tool_calls: NotRequired[list[dict]]
+    # 写操作确认 / 槽位缺失
+    requires_confirmation: NotRequired[bool]
+    confirm_payload: NotRequired[Optional[dict]]
+    missing_slots:   NotRequired[Optional[list[str]]]
+
+    # ── 查询改写 ─────────────────────────────────────
+    rewritten_query: NotRequired[Optional[str]]
+
+    # ── 节点级 trace（供 agent_traces 落库）──────────
+    node_steps:      NotRequired[list[dict]]
+
+    # ── 评测开关（仅 eval runner 设置，线上聊天不传）─────────────
+    # 评测指标只依赖 intent / sources / tool_name，不需要答案正文。
+    # 打开 skip_generation 可跳过最耗时的生成节点（CPU 上 ~100s/条）。
+    skip_generation: NotRequired[bool]
+    gen_max_tokens:  NotRequired[Optional[int]]   # None → 用节点默认值
+    tool_dry_run:    NotRequired[bool]            # True → 工具不产生副作用
 
     # ── 流式传输队列（in-memory only，不参与 checkpointing）──
     token_queue: Optional[asyncio.Queue]  # asyncio.Queue[dict | None]

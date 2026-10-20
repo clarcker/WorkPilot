@@ -21,30 +21,37 @@ from core.logger import logger
 _BATCH_SIZE = 16
 
 
-async def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
-    """
-    批量获取 embedding 向量。
+async def get_active_embed_model() -> str:
+    """P5：优先 system_config.active_embedding_model，否则配置默认。"""
+    try:
+        from sqlalchemy import select
+        from db.models import SystemConfig
+        from db.session import async_session_factory
+        async with async_session_factory() as db:
+            row = await db.scalar(
+                select(SystemConfig).where(SystemConfig.key == "active_embedding_model")
+            )
+            if row and isinstance(row.value, dict) and row.value.get("model"):
+                return str(row.value["model"])
+    except Exception:
+        pass
+    return settings.ollama_embed_model
 
-    Args:
-        texts: 待向量化的文本列表
 
-    Returns:
-        与 texts 等长的向量列表，每个向量为 768 维 float 列表。
-
-    Raises:
-        httpx.HTTPError: Ollama 服务不可达或返回非 200
-        ValueError: 返回向量数量与输入不匹配
-    """
+async def get_embeddings_batch(
+    texts: list[str],
+    model: str | None = None,
+) -> list[list[float]]:
     if not texts:
         return []
 
+    model_name = model or await get_active_embed_model()
     all_embeddings: list[list[float]] = []
 
     async with httpx.AsyncClient(timeout=60.0) as client:
-        # 按批次处理
         for i in range(0, len(texts), _BATCH_SIZE):
             batch = texts[i: i + _BATCH_SIZE]
-            embeddings = await _embed_batch(client, batch)
+            embeddings = await _embed_batch(client, batch, model_name)
             all_embeddings.extend(embeddings)
 
     if len(all_embeddings) != len(texts):
@@ -55,9 +62,9 @@ async def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
     return all_embeddings
 
 
-async def get_embedding(text: str) -> list[float]:
+async def get_embedding(text: str, model: str | None = None) -> list[float]:
     """单条 embedding，内部复用批量接口。"""
-    results = await get_embeddings_batch([text])
+    results = await get_embeddings_batch([text], model=model)
     return results[0]
 
 
@@ -65,39 +72,41 @@ async def get_embedding(text: str) -> list[float]:
 # 内部实现
 # ------------------------------------------------------------------
 
-async def _embed_batch(client: httpx.AsyncClient, texts: list[str]) -> list[list[float]]:
-    """
-    尝试新版批量接口 /api/embed；若返回 404 则逐条调用旧版接口 /api/embeddings。
-    """
+async def _embed_batch(
+    client: httpx.AsyncClient,
+    texts: list[str],
+    model: str | None = None,
+) -> list[list[float]]:
+    model_name = model or settings.ollama_embed_model
     try:
         resp = await client.post(
             f"{settings.ollama_base_url}/api/embed",
-            json={"model": settings.ollama_embed_model, "input": texts},
+            json={"model": model_name, "input": texts},
         )
         if resp.status_code == 404:
-            # 旧版 Ollama 不支持 /api/embed，回退到逐条调用
-            return await _embed_one_by_one(client, texts)
+            return await _embed_one_by_one(client, texts, model_name)
         resp.raise_for_status()
         data = resp.json()
-        # 新版响应格式：{"embeddings": [[...]]}
         return data["embeddings"]
 
     except httpx.HTTPStatusError:
         raise
     except Exception as e:
         logger.warning(f"批量 embedding 失败，回退到逐条模式: {e}")
-        return await _embed_one_by_one(client, texts)
+        return await _embed_one_by_one(client, texts, model_name)
 
 
 async def _embed_one_by_one(
-    client: httpx.AsyncClient, texts: list[str]
+    client: httpx.AsyncClient,
+    texts: list[str],
+    model: str | None = None,
 ) -> list[list[float]]:
-    """旧版 Ollama /api/embeddings 逐条调用。"""
+    model_name = model or settings.ollama_embed_model
     results = []
     for text in texts:
         resp = await client.post(
             f"{settings.ollama_base_url}/api/embeddings",
-            json={"model": settings.ollama_embed_model, "prompt": text},
+            json={"model": model_name, "prompt": text},
         )
         resp.raise_for_status()
         results.append(resp.json()["embedding"])

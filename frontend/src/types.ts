@@ -32,6 +32,9 @@ export interface Source {
   page_no: number | null
   score: number
   chunk_text: string
+  lifecycle?: string
+  effective_date?: string | null
+  lifecycle_note?: string | null
 }
 
 export interface Message {
@@ -64,12 +67,49 @@ export interface ToolCallInfo {
   result?: unknown
   error?: string
   latency_ms?: number
+  requires_confirmation?: boolean
+  missing_slots?: string[] | null
+}
+
+export interface ConfirmRequiredPayload {
+  tool_name: string
+  payload: {
+    request_id?: number
+    request_no?: string
+    status?: string
+    requires_confirmation?: boolean
+    message?: string
+    form?: {
+      category?: string
+      amount?: number
+      days?: number | null
+      trip_start?: string | null
+      trip_end?: string | null
+      approval_ref?: string | null
+    }
+    precheck?: {
+      ok?: boolean
+      remaining?: number
+      daily_max?: number
+      requires_special_approval?: boolean
+      violations?: Array<{ rule?: string; message?: string; over_amount?: number }>
+    }
+  }
+}
+
+export interface FormIncompletePayload {
+  missing_slots: string[]
+  message?: string
 }
 
 export type SSEEvent =
   | { type: 'conversation_id'; content: number }
+  | { type: 'queued';           content: { position: number } }
   | { type: 'token';           content: string }
   | { type: 'sources';         content: Source[] }
   | { type: 'tool_call';       content: ToolCallInfo }
+  | { type: 'confirm_required'; content: ConfirmRequiredPayload }
+  | { type: 'form_incomplete';  content: FormIncompletePayload }
+  | { type: 'qa_id';           content: number }
   | { type: 'done';            content: string }
   | { type: 'error';           content: string }

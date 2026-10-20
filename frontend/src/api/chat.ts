@@ -26,6 +26,11 @@ export async function deleteConversation(id: number): Promise<void> {
   await client.delete(`/chat/conversations/${id}`)
 }
 
+export async function renameConversation(id: number, title: string): Promise<Conversation> {
+  const { data } = await client.patch<Conversation>(`/chat/conversations/${id}/title`, { title })
+  return data
+}
+
 // ── SSE streaming ─────────────────────────────────────────────────
 // EventSource only supports GET; we use fetch + ReadableStream for POST.
 

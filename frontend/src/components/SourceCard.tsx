@@ -8,6 +8,12 @@ interface Props {
   sources: Source[]
 }
 
+const LIFECYCLE_LABELS: Record<string, { label: string; color: string }> = {
+  effective:  { label: '现行', color: 'green' },
+  superseded: { label: '已替代', color: 'orange' },
+  draft:      { label: '草案', color: 'purple' },
+}
+
 export default function SourceCard({ sources }: Props) {
   if (!sources || sources.length === 0) return null
 
@@ -17,6 +23,9 @@ export default function SourceCard({ sources }: Props) {
     if (src.heading) locationParts.push(src.heading)
     if (src.page_no) locationParts.push(`第${src.page_no}页`)
     const location = locationParts.length > 0 ? locationParts.join(' > ') : null
+    const life = src.lifecycle && LIFECYCLE_LABELS[src.lifecycle]
+      ? LIFECYCLE_LABELS[src.lifecycle]
+      : null
 
     return {
       key: String(idx),
@@ -24,6 +33,10 @@ export default function SourceCard({ sources }: Props) {
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <FileTextOutlined style={{ color: '#1677ff' }} />
           <Text strong style={{ fontSize: 13 }}>{src.doc_name || '未知文档'}</Text>
+          {life && <Tag color={life.color} style={{ fontSize: 11 }}>{life.label}</Tag>}
+          {src.effective_date && (
+            <Text type="secondary" style={{ fontSize: 11 }}>{src.effective_date}</Text>
+          )}
           {location && (
             <Text type="secondary" style={{ fontSize: 11 }}>{location}</Text>
           )}
@@ -32,23 +45,32 @@ export default function SourceCard({ sources }: Props) {
           </Tag>
         </span>
       ),
-      children: src.chunk_text ? (
-        <Paragraph
-          style={{
-            fontSize: 13,
-            color: '#555',
-            margin: 0,
-            padding: '4px 0',
-            borderLeft: '3px solid #1677ff',
-            paddingLeft: 10,
-            lineHeight: 1.7,
-          }}
-        >
-          {src.chunk_text.length > 300
-            ? src.chunk_text.slice(0, 300) + '...'
-            : src.chunk_text}
-        </Paragraph>
-      ) : null,
+      children: (
+        <>
+          {src.lifecycle_note && (
+            <Paragraph type="warning" style={{ fontSize: 12, marginBottom: 6 }}>
+              {src.lifecycle_note}
+            </Paragraph>
+          )}
+          {src.chunk_text ? (
+            <Paragraph
+              style={{
+                fontSize: 13,
+                color: '#555',
+                margin: 0,
+                padding: '4px 0',
+                borderLeft: '3px solid #1677ff',
+                paddingLeft: 10,
+                lineHeight: 1.7,
+              }}
+            >
+              {src.chunk_text.length > 300
+                ? src.chunk_text.slice(0, 300) + '...'
+                : src.chunk_text}
+            </Paragraph>
+          ) : null}
+        </>
+      ),
     }
   })
 

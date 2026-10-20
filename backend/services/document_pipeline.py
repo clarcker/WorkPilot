@@ -25,6 +25,7 @@ from db.session import async_session_factory
 from services.chunker import chunk_segments
 from services.document_parser import parse_document
 from services.embedder import get_embeddings_batch
+from services.fts import tokenize_for_search
 
 
 async def run_pipeline(doc_id: int) -> None:
@@ -86,7 +87,8 @@ async def _process(doc_id: int) -> None:
         embeddings_list = await get_embeddings_batch(texts)
         logger.info(f"[pipeline] doc_id={doc_id} embedding完成，count={len(embeddings_list)}")
 
-        # 6. 保存 DocChunk + Embedding
+        # 6. 保存 DocChunk + Embedding + content_tsv
+        from sqlalchemy import text as sa_text
         for chunk_data, embedding_vec in zip(chunks_data, embeddings_list):
             chunk = DocChunk(
                 doc_id=doc_id,
@@ -94,10 +96,21 @@ async def _process(doc_id: int) -> None:
                 content=chunk_data["content"],
                 page_no=chunk_data["page_no"],
                 heading=chunk_data["heading"],
-                token_count=len(chunk_data["content"]),  # 字符数近似 token 数
+                token_count=len(chunk_data["content"]),
             )
             db.add(chunk)
-            await db.flush()  # 获取 chunk.id
+            await db.flush()
+
+            # R3：写入分词后的 tsvector
+            tokenized = tokenize_for_search(chunk_data["content"])
+            if tokenized:
+                await db.execute(
+                    sa_text(
+                        "UPDATE doc_chunks SET content_tsv = "
+                        "to_tsvector('simple', :tok) WHERE id = :id"
+                    ),
+                    {"tok": tokenized, "id": chunk.id},
+                )
 
             emb = Embedding(
                 chunk_id=chunk.id,

@@ -2,9 +2,15 @@
 WorkPilot v2 — FastAPI 入口
 
 启动：
-    uv run fastapi dev main.py       # 开发（热重载，端口 8000）
-    uv run gunicorn main:app ...     # 生产
+    # Windows / 开发
+    uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+    uv run fastapi dev main.py
+    # 多 worker 验收（Windows 也可用）；gunicorn 仅 Linux/Docker（fcntl）
+    uv run uvicorn main:app --workers 4 --port 8000
+    # Linux / Docker 生产
+    uv run gunicorn -k uvicorn.workers.UvicornWorker -w 4 main:app -b 0.0.0.0:8000
 """
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -22,6 +28,13 @@ from api import users as user_router
 from api import audit as audit_router
 from api import system as system_router
 from api import eval as eval_router
+from api import reimbursements as reimb_router
+from api import traces as traces_router
+from api import tickets as tickets_router
+from api import ticket_admin as ticket_admin_router
+from api import quality as quality_router
+from api import notifications as notif_router
+from api import embeddings_admin as emb_router
 
 
 # ------------------------------------------------------------------
@@ -39,8 +52,32 @@ async def lifespan(app: FastAPI):
         environment=settings.environment,
     )
     logger.info("WorkPilot v2 starting | env={env}", env=settings.environment)
+    for w in settings.validate_for_startup():
+        logger.warning("[security] {w}", w=w)
+    # 模型分档路由一览（排查「改了配置仍走本地」先看这行）
+    from core.config import describe_llm_routing
+    logger.info("[llm] routing | {r}", r=describe_llm_routing())
+
+    # P4 prompt 版本：启动即校验，缺失直接失败
+    try:
+        from services.prompt_loader import current_prompt_set, load_prompts
+        load_prompts()
+        logger.info("[prompts] set_version={v}", v=current_prompt_set())
+    except Exception as exc:
+        logger.error("[prompts] 加载失败（阻断启动）: {e}", e=exc)
+        raise
+
+    # P2 调度：仅 advisory lock 选主成功的 worker 启动 APScheduler
+    # （JobStore 不防多进程重复触发；cleanup_loop 兜底已移除，避免 2N 执行者）
+    from services.scheduler import is_scheduler_leader, start_scheduler, stop_scheduler
+    await start_scheduler()
+    if not is_scheduler_leader():
+        logger.info("[scheduler] 非 leader：本进程不执行定时 cleanup/日报")
+
     yield
+
     # 关闭
+    stop_scheduler()
     logger.info("WorkPilot v2 shutting down")
 
 
@@ -58,11 +95,11 @@ app = FastAPI(
 )
 
 # ------------------------------------------------------------------
-# 跨域（开发阶段开放，生产环境收紧 origins）
+# 跨域：开发默认 localhost:5173；生产通过 CORS_ORIGINS 配置白名单
 # ------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],     # 生产环境改为前端域名
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -71,6 +108,14 @@ app.add_middleware(
 # 请求日志中间件
 from core.logger import RequestLoggingMiddleware
 app.add_middleware(RequestLoggingMiddleware)
+
+# 限流：登录 + 对话流（内存滑动窗口，单机用）
+from core.ratelimit import RateLimitMiddleware
+app.add_middleware(
+    RateLimitMiddleware,
+    login_per_minute=settings.rate_limit_login_per_minute,
+    chat_per_5min=settings.rate_limit_chat_per_5min,
+)
 
 
 # ------------------------------------------------------------------
@@ -119,6 +164,13 @@ app.include_router(chat_router.router,   prefix="/api/chat",               tags=
 app.include_router(audit_router.router,  prefix="/api/admin/audit",        tags=["审计日志"])
 app.include_router(system_router.router, prefix="/api/admin/system",       tags=["系统配置"])
 app.include_router(eval_router.router,   prefix="/api/eval",               tags=["评测"])
+app.include_router(reimb_router.router,  prefix="/api/reimbursements",     tags=["报销申请"])
+app.include_router(traces_router.router, prefix="/api/admin/traces",       tags=["Agent Trace"])
+app.include_router(tickets_router.router, prefix="/api/tickets",           tags=["IT 工单"])
+app.include_router(ticket_admin_router.router, prefix="/api/admin/tickets", tags=["工单处理"])
+app.include_router(quality_router.router,   prefix="/api/quality",         tags=["评测/反馈/缺口"])
+app.include_router(notif_router.router,     prefix="/api/admin",            tags=["通知"])
+app.include_router(emb_router.router,       prefix="/api/admin",            tags=["embedding"])
 
 
 # ------------------------------------------------------------------

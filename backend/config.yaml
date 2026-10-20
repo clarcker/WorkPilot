@@ -1,0 +1,71 @@
+# WorkPilot v2 — 非敏感业务配置（扁平 key，与 Settings 字段同名）
+# 敏感信息（密钥/密码/连接串/API Key）放 backend/.env，不要写在本文件
+#
+# 优先级：环境变量 > .env > 本文件 > 代码默认值
+
+# ── 应用 ───────────────────────────────────────────────────────
+environment: development
+password_min_length: 8
+login_max_fail_count: 5
+
+# ── JWT（算法/有效期；密钥在 .env）────────────────────────────
+jwt_algorithm: HS256
+jwt_expire_minutes: 480
+
+# ── LLM ────────────────────────────────────────────────────────
+# provider: ollama | openai_compatible
+llm_provider: openai_compatible
+# 管理员是否优先走外部 API（还需在 .env 配置 OPENAI_API_KEY）
+admin_use_external_llm: true
+ollama_base_url: http://127.0.0.1:11434
+ollama_embed_model: nomic-embed-text
+ollama_chat_model: qwen2.5:7b
+openai_base_url: https://ark.cn-beijing.volces.com/api/coding/v3
+openai_model: deepseek-v4-flash
+
+# 超时（秒）：httpx read = 两次数据间隔；CPU 7B prefill 可能很长
+llm_connect_timeout: 10.0
+llm_complete_timeout: 120.0
+llm_stream_timeout: 300.0
+tool_timeout: 15.0
+# P1：重试 / 熔断 / 并发 / 降级
+llm_retry_max: 3
+llm_retry_base_delay: 0.5
+llm_circuit_fail_threshold: 5
+llm_circuit_open_seconds: 30
+llm_max_concurrency_local: 2
+llm_max_concurrency_external: 8
+llm_queue_timeout: 20
+llm_fallback_enabled: true
+# P2：APScheduler（PostgreSQLJobStore + advisory lock 选主）
+scheduler_enabled: true
+daily_report_hour: 9
+scheduler_timezone: Asia/Shanghai
+
+# 检索：与线上评测一致；TopK 过大会在小语料上抬高 doc_hit（天花板）
+retrieval_top_k: 5
+retrieval_min_score: 0.25
+retrieval_enable_fts: true
+# E5：修复 pinned 后 3 次 A/B，配额 on/off mrr 完全相同（delta=0）→ 默认关闭
+retrieval_must_include: false
+retrieval_merge_chunks: true
+retrieval_rrf_k: 60
+retrieval_w_vec: 0.7
+retrieval_w_kw: 0.3
+
+# ── 上传 ───────────────────────────────────────────────────────
+upload_dir: /data/uploads
+max_file_size_mb: 200
+
+# ── 安全 / 限流 ────────────────────────────────────────────────
+# 开发默认 localhost:5173；生产填前端域名，禁止 *
+cors_origins: http://localhost:5173,http://127.0.0.1:5173,http://localhost
+rate_limit_login_per_minute: 10
+rate_limit_chat_per_5min: 20
+
+# ── 日志 ───────────────────────────────────────────────────────
+log_level: DEBUG
+log_rotation: 1 day
+log_retention: 7 days
+log_console: true
+log_dir: logs

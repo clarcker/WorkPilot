@@ -492,6 +492,9 @@ Content-Type: multipart/form-data
 | `visibility` | string | 否 | 默认 `dept_only`，见下表 |
 | `category` | string | 否 | 自定义分类标签 |
 | `version` | string | 否 | 版本号（如 `v1.2`） |
+| `lifecycle` | string | 否 | 默认 `effective`；可传 `draft`（草案，仅管理员召回） |
+| `effective_date` | string | 否 | `YYYY-MM-DD` 生效日期 |
+| `supersedes_doc_id` | int | 否 | 作为新版本替代的旧文档 ID；提交后旧文档自动 `lifecycle=superseded` |
 
 **visibility 可选值**
 
@@ -501,6 +504,14 @@ Content-Type: multipart/form-data
 | `non_customer` | 非客服部门的所有成员 |
 | `dept_only` | 仅本部门成员 |
 | `specific_users` | 仅白名单内的指定人员（需配合 5.7/5.8 接口设置） |
+
+**lifecycle 可选值（业务生命周期，与 status 正交）**
+
+| 值 | 默认检索 | 说明 |
+|---|---|---|
+| `effective` | ✅ 所有角色 | 现行有效 |
+| `superseded` | ❌ | 已被新版替代；`time_scope=historical` 时员工/管理员可见 |
+| `draft` | ❌ 员工不可见 | 仅 `dept_admin` / `super_admin` 召回；员工提问不透露存在 |
 
 **响应** `201`（上传成功，后台异步处理）
 
@@ -513,6 +524,10 @@ Content-Type: multipart/form-data
     "dept_id": 2, "dept_name": "研发部",
     "visibility": "dept_only",
     "status": "processing",    // 上传后立即进入后台处理
+    "lifecycle": "effective",
+    "effective_date": "2026-01-01",
+    "supersedes_doc_id": 3,
+    "supersedes_name": "旧版手册.pdf",
     "error_message": null,
     "category": null, "version": null,
     "uploaded_by": 1, "uploaded_by_name": "管理员",
@@ -531,6 +546,13 @@ processing  →  ready     （解析 + 向量化成功，可被检索）
 ready / failed  →  archived  （归档 / 软删除，从检索结果消失）
 ```
 
+**文档 lifecycle（业务生命周期）**
+
+```
+effective  ⇄  superseded  ⇄  draft
+上传替代：新文档 supersedes_doc_id=旧文档 → 旧文档自动 superseded
+```
+
 ---
 
 ### 5.2 列出文档 `[管理员]`
@@ -545,6 +567,7 @@ GET /api/docs/
 |---|---|
 | `dept_id` | 按部门过滤（仅超管有效） |
 | `status` | `processing` / `ready` / `failed` |
+| `lifecycle` | `effective` / `superseded` / `draft` |
 | `keyword` | 按文件名模糊搜索 |
 
 默认不返回 `archived` 文档。
@@ -557,7 +580,17 @@ GET /api/docs/
 GET /api/docs/{doc_id}
 ```
 
-返回 `DocOut`，含 `chunk_count`（处理完成后非零）。
+返回 `DocOut`，含 `chunk_count`（处理完成后非零）、`lifecycle`、`effective_date`、`supersedes_name`、`superseded_by_name`。
+
+---
+
+### 5.3b 版本链 `[管理员]`
+
+```
+GET /api/docs/{doc_id}/version-chain
+```
+
+返回旧版 → 当前 → 新版列表，每项含 `id / file_name / lifecycle / effective_date / status / is_self`。
 
 ---
 
@@ -570,10 +603,16 @@ PATCH /api/docs/{doc_id}
 **请求体**（字段均可选）
 
 ```json
-{ "visibility": "global", "category": "制度文件", "version": "v2.0" }
+{
+  "visibility": "global",
+  "category": "制度文件",
+  "version": "v2.0",
+  "lifecycle": "superseded",
+  "effective_date": "2026-01-01"
+}
 ```
 
-已归档文档不可修改。
+生命周期变更写入 `audit_logs`（action=`doc.lifecycle_update`）。已归档文档不可修改。
 
 ---
 
@@ -656,13 +695,48 @@ Content-Type: application/json
 
 **SSE 事件类型（按出现顺序）**
 
+| 事件 | content | 说明 |
+|---|---|---|
+| `conversation_id` | number | 新会话 ID |
+| `queued` | `{position: n}` | LLM 并发排队；超 `llm_queue_timeout` 后跟 `error: 系统繁忙` |
+| `token` | string | 答案片段 |
+| `sources` | array | 引用来源（含 lifecycle） |
+| `tool_call` | object | 工具调用结果 |
+| `confirm_required` | object | 写操作确认卡 |
+| `form_incomplete` | object | 槽位缺失 |
+| `qa_id` | number | 反馈用 |
+| `done` / `error` | string | 结束 |
+
 | type | content 类型 | 说明 |
 |---|---|---|
 | `conversation_id` | **number**（整数） | 新建会话时第一条，客户端须保存用于后续追问 |
 | `token` | string | 流式 token，依次拼接为完整回答 |
 | `sources` | array | 检索到相关文档时出现，结构见下 |
+| `tool_call` | object | 工具调用结果（含 `requires_confirmation` / `missing_slots`） |
+| `confirm_required` | object | 写操作生成草稿，需用户确认；见下 |
+| `form_incomplete` | object | 槽位缺失：`{missing_slots, message}` |
 | `done` | string（空） | 流结束标志，最后一条 |
 | `error` | string | 异常描述，之后紧跟 `done` |
+
+**confirm_required content**
+
+```jsonc
+{
+  "tool_name": "submit_reimbursement_request",
+  "payload": {
+    "request_id": 1,
+    "request_no": "RB-20260916-0001",
+    "status": "draft",
+    "requires_confirmation": true,
+    "form": { "category": "差旅住宿", "amount": 1800, "days": 3, "trip_start": "...", "trip_end": "...", "approval_ref": "TR-..." },
+    "precheck": { "ok": true, "remaining": 37700, "requires_special_approval": true, "violations": [...] }
+  }
+}
+```
+
+确认 / 取消：
+- `POST /api/reimbursements/{request_id}/confirm` → `pending`，占用年度额度
+- `POST /api/reimbursements/{request_id}/cancel` → `cancelled`，不产生审批记录
 
 **sources 单项结构**
 
@@ -682,10 +756,15 @@ Content-Type: application/json
 ```
 data: {"type": "conversation_id", "content": 42}
 
+data: {"type": "queued", "content": {"position": 1}}
 data: {"type": "token", "content": "公司年假"}
 data: {"type": "token", "content": "政策如下："}
 
 data: {"type": "sources", "content": [{"doc_id": 10, "doc_name": "入职手册.pdf", "chunk_id": 42, "heading": "第三章 年假制度", "page_no": 8, "score": 0.87}]}
+
+data: {"type": "tool_call", "content": {"tool_name": "submit_reimbursement_request", "tool_args": {"category": "差旅住宿", "amount": 1800}, "allowed": true, "result": {"request_id": 1, "request_no": "RB-20260916-0001", "status": "draft"}, "requires_confirmation": true, "latency_ms": 12}}
+
+data: {"type": "confirm_required", "content": {"tool_name": "submit_reimbursement_request", "payload": {"request_id": 1, "request_no": "RB-20260916-0001", "form": {"category": "差旅住宿", "amount": 1800, "days": 3}, "precheck": {"ok": true, "requires_special_approval": true, "violations": [{"rule": "daily_max", "message": "住宿日均 600 元，超出标准 500 元/天，超标 300 元"}]}}}}
 
 data: {"type": "done", "content": ""}
 ```
@@ -770,6 +849,25 @@ DELETE /api/chat/conversations/{conv_id}
 | **合计** | **33** | — | — |
 
 > **Phase 2 待实现**：审计日志查询 `/api/admin/audit`、系统配置 `/api/admin/system`。
+
+---
+
+## 7b. 报销申请 `/api/reimbursements`
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| POST | `/{id}/confirm` | `[登录]` | 确认草稿 → pending，占用额度 |
+| POST | `/{id}/cancel` | `[登录]` | 取消 draft/pending，退回额度 |
+| GET | `/mine` | `[登录]` | 我的申请列表 |
+| GET | `/approvals` | `[管理员]` | 审批队列（部门管理员仅本部门） |
+| POST | `/{id}/decision` | `[管理员]` | `{"approved": bool, "comment": "..."}` |
+
+## 7c. Agent Trace `/api/admin/traces`
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/` | `[管理员]` | 分页列表；部门管理员仅本部门 |
+| GET | `/{id}` | `[管理员]` | 节点步骤、工具、回答详情 |
 
 ---
 

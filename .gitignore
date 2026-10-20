@@ -8,3 +8,14 @@ __pycache__/
 .idea/
 **/dist/
 **/node_modules/
+
+# 运行时产物
+*.pid
+backend/logs/
+backend/uploads/
+backend/scripts/logs/
+scripts_split_admin.py
+
+# 旧语料目录，已迁至 backend/seed_docs/
+/test/
+docs/problem-solving-log-*.md

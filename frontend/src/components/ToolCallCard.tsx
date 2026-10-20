@@ -11,6 +11,9 @@ const { Text } = Typography
 const TOOL_LABELS: Record<string, string> = {
   query_employee_profile: '查询员工信息',
   query_reimbursement_limit: '查询报销额度',
+  precheck_reimbursement: '报销预审',
+  submit_reimbursement_request: '提交报销申请',
+  query_my_reimbursements: '查询报销进度',
   create_it_ticket: '创建 IT 工单',
 }
 
@@ -56,10 +59,10 @@ export default function ToolCallCard({ info }: { info: ToolCallInfo }) {
         <Text type="danger" style={{ fontSize: 12 }}>错误: {info.error}</Text>
       )}
 
-      {info.allowed && info.result && (
+      {info.allowed && info.result != null && (
         <div style={{ marginTop: 4 }}>
           <Text type="secondary" style={{ fontSize: 12 }}>结果: </Text>
-          <Text style={{ fontSize: 12 }}>
+          <Text style={{ fontSize: 12, whiteSpace: 'pre-wrap' }}>
             {typeof info.result === 'string'
               ? info.result
               : JSON.stringify(info.result, null, 2)}

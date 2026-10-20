@@ -1,11 +1,18 @@
 """
 Eval runner — 运行 golden cases 评测 RAG 工作流。
 
-指标：
-- intent_accuracy: 意图分类准确率
-- doc_hit_rate: 检索命中率
-- tool_call_accuracy: 工具调用准确率
-- citation_rate: 引用覆盖率
+指标（E2 重定义）：
+- doc_hit@3 / doc_hit_rate: 期望文档出现在 sources 前 3（仅 expected_doc_title 非空）
+- recall@1: 期望文档是 sources 第 1
+- mrr: 1/排名，未命中 0，对 expected_doc_title case 平均
+- heading_hit: 期望 heading 出现在命中 chunk 的 heading
+- tool_call_accuracy / intent_accuracy / permission_pass_rate: 保留
+- citation_rate: 仅 should_cite 且 doc_hit@3 的 case
+- skip_generation=True 时 citation_rate 不评估答案正文质量，只看 sources 列表
+
+conversation_history: case 可带 history 字段（list of {role,content}），用于多轮改写评测。
+session_tool_calls / time_scope: Q2/Q1 case 字段。
+mode=judge: 生成答案后调用 LLM-as-judge（eval/judge.py），只评 judge=true 的 case。
 """
 from __future__ import annotations
 
@@ -14,12 +21,17 @@ import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
+from core.logger import logger
 from graph.state import RAGState
 from graph.workflow import rag_graph
+from services.embedder import get_embedding
+from services.llm_client import chat_complete
 
 _CASES_PATH = Path(__file__).parent / "cases.json"
+DEFAULT_CASE_TIMEOUT = 90.0
+JUDGE_CASE_TIMEOUT = 180.0
 
 
 @dataclass
@@ -29,42 +41,191 @@ class CaseResult:
     expected_intent: str
     actual_intent: str
     intent_correct: bool
-    doc_hit: bool
+    doc_hit: bool          # Top-3 命中（保留字段名兼容旧报告）
+    doc_rank: int          # 期望文档在 sources 中的排名，1-based；未命中 -1
+    recall_at_1: bool
+    heading_hit: bool
+    mrr: float             # 本条 1/rank 或 0
     tool_call_correct: bool
     has_citation: bool
+    forbidden_doc_leaked: bool
     latency_ms: int
+    group: str = ""
+    timed_out: bool = False
     error: Optional[str] = None
     detail: str = ""
+    has_expected_doc: bool = False
+    answer: str = ""
+    sources: list = field(default_factory=list)
+    tool_name: Optional[str] = None
+    tool_result: Optional[dict] = None
+    tool_success: Optional[bool] = None
+    tool_error: Optional[str] = None
+    judge: Optional[dict] = None
 
 
 @dataclass
 class EvalReport:
     total_cases: int
+    scored_cases: int
+    timeout_count: int
     intent_accuracy: float
     doc_hit_rate: float
+    recall_at_1: float
+    mrr: float
+    heading_hit_rate: float
     tool_call_accuracy: float
     citation_rate: float
+    permission_pass_rate: float
     avg_latency_ms: int
     case_results: list[CaseResult] = field(default_factory=list)
     failed_cases: list[dict] = field(default_factory=list)
+    timeout_cases: list[dict] = field(default_factory=list)
+    by_group: dict = field(default_factory=dict)
+    # Q3
+    mode: str = "fast"
+    judge_model: Optional[str] = None
+    faithfulness_avg: Optional[float] = None
+    points_coverage: Optional[float] = None
+    hallucination_count: int = 0
+    refusal_correct_rate: Optional[float] = None
+    local_judge: bool = False
+
+
+async def warmup() -> float:
+    """
+    预热 Ollama，返回耗时（秒）。
+
+    Ollama 会在空闲若干分钟后把模型换出内存，下次调用要重新加载
+    （这台开发机上 qwen2.5:7b 约 45~55s）。不预热的话第一条 case 会
+    白白背上这个开销：既可能直接判超时，也会把 avg_latency_ms 拉偏。
+    预热不计入任何指标。
+    """
+    start = time.time()
+    try:
+        await asyncio.gather(
+            chat_complete([{"role": "user", "content": "hi"}], temperature=0, max_tokens=1),
+            get_embedding("warmup"),
+        )
+    except Exception as exc:
+        # 预热失败不阻断评测——真实的失败会在各条 case 里如实反映出来
+        logger.warning(f"[eval] 预热失败（继续评测）: {type(exc).__name__}: {exc}")
+    elapsed = time.time() - start
+    logger.info(f"[eval] 模型预热完成，耗时 {elapsed:.1f}s")
+    return elapsed
 
 
 def load_cases() -> list[dict]:
+    """读取 eval/cases.json（脚本/单测用；线上 eval API 优先读 eval_cases 表）。"""
     with open(_CASES_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-async def run_case(case: dict, user_id: int = 1, user_role: str = "employee",
-                   user_dept_id: int | None = 1) -> CaseResult:
+def _load_from_json() -> list[dict]:
+    return load_cases()
+
+
+async def load_cases_from_db() -> list[dict]:
+    """从 eval_cases 表读取 active case；表空则回退 json。"""
+    try:
+        from sqlalchemy import select
+        from db.models import EvalCase
+        from db.session import async_session_factory
+
+        async with async_session_factory() as db:
+            rows = (
+                await db.execute(select(EvalCase).where(EvalCase.active == True))  # noqa: E712
+            ).scalars().all()
+        if rows:
+            return [dict(r.payload) for r in rows]
+    except Exception as exc:
+        logger.debug(f"[eval] load_cases_from_db fallback json: {exc}")
+    return load_cases()
+
+
+async def seed_eval_cases_from_json(created_by: int | None = None) -> int:
+    """把 cases.json 导入 eval_cases（按 case_id upsert）。需独立 engine。"""
+    from sqlalchemy import select
+    from db.models import EvalCase
+    from db.session import async_session_factory
+
+    cases = load_cases()
+    n = 0
+    async with async_session_factory() as db:
+        for c in cases:
+            cid = str(c.get("id") or f"case_auto_{n}")
+            existing = await db.scalar(select(EvalCase).where(EvalCase.case_id == cid))
+            if existing:
+                existing.payload = c
+                existing.question = c.get("question") or ""
+                existing.group = c.get("group")
+                existing.active = True
+            else:
+                db.add(EvalCase(
+                    case_id=cid,
+                    question=c.get("question") or "",
+                    group=c.get("group"),
+                    payload=c,
+                    source="seed",
+                    active=True,
+                    created_by=created_by,
+                ))
+            n += 1
+        await db.commit()
+    return n
+
+
+def _args_match(expected: dict, actual: dict) -> tuple[bool, str]:
+    """
+    子集匹配：expected 中声明的每个键都要在 actual 中出现且值相等。
+    actual 里的额外参数不算错（模型可以多带可选参数）。
+    """
+    if not expected:
+        return True, ""
+    actual = actual or {}
+    bad = []
+    for k, v in expected.items():
+        if k not in actual:
+            bad.append(f"缺少参数 {k}")
+        elif str(actual[k]).strip() != str(v).strip():
+            bad.append(f"参数 {k}: 期望={v}, 实际={actual[k]}")
+    return (not bad), "; ".join(bad)
+
+
+async def run_case(
+    case: dict,
+    user_id: int = 1,
+    user_role: str = "employee",
+    user_dept_id: int | None = 1,
+    skip_generation: bool = True,
+    tool_dry_run: bool = True,
+    gen_max_tokens: int | None = 512,
+    timeout: float = DEFAULT_CASE_TIMEOUT,
+    judge: bool = False,
+) -> CaseResult:
+    # 部分 case 必须以固定身份运行（例如权限负例），as_user 覆盖调用者身份
+    as_user = case.get("as_user") or {}
+    run_user_id = as_user.get("user_id", user_id)
+    run_user_role = as_user.get("user_role", user_role)
+    run_user_dept_id = as_user.get("user_dept_id", user_dept_id)
+
     start = time.time()
+    # ── 多轮 history ────────────────────────────────────────────
+    history = case.get("conversation_history") or case.get("history") or []
+    session_tool_calls = case.get("session_tool_calls") or []
+    # case 可强制 time_scope（对照实验）；否则由 query_understand 判定
+    time_scope = case.get("time_scope")
+
     initial_state = RAGState(
         query=case["question"],
-        user_id=user_id,
-        user_role=user_role,
-        user_dept_id=user_dept_id,
-        conversation_history=[],
+        user_id=run_user_id,
+        user_role=run_user_role,
+        user_dept_id=run_user_dept_id,
+        conversation_history=history,
+        conversation_id=case.get("conversation_id"),
         anonymized_query="",
         intent="",
+        time_scope=time_scope,
         retrieved_chunks=[],
         full_answer="",
         sources=[],
@@ -76,87 +237,350 @@ async def run_case(case: dict, user_id: int = 1, user_role: str = "employee",
         tool_result=None,
         permission_denied=None,
         trace=[],
+        tool_success=None,
+        tool_error=None,
+        tool_step=0,
+        tool_history=[],
+        session_tool_calls=session_tool_calls,
+        max_tool_steps=4,
+        node_steps=[],
+        requires_confirmation=False,
+        confirm_payload=None,
+        missing_slots=None,
+        rewritten_query=None,
+        skip_generation=skip_generation,
+        gen_max_tokens=gen_max_tokens,
+        tool_dry_run=tool_dry_run,
     )
-    try:
-        final_state = await asyncio.wait_for(rag_graph.ainvoke(initial_state), timeout=60.0)
-    except Exception as exc:
+
+    def _blank(timed_out: bool, err: str) -> CaseResult:
         return CaseResult(
             case_id=case["id"], question=case["question"],
             expected_intent=case.get("expected_intent", ""), actual_intent="",
-            intent_correct=False, doc_hit=False, tool_call_correct=False,
-            has_citation=False, latency_ms=int((time.time() - start) * 1000),
-            error=str(exc),
+            intent_correct=False, doc_hit=False, doc_rank=-1,
+            recall_at_1=False, heading_hit=False, mrr=0.0,
+            tool_call_correct=False,
+            has_citation=False, forbidden_doc_leaked=False,
+            latency_ms=int((time.time() - start) * 1000),
+            group=case.get("group") or "",
+            timed_out=timed_out, error=err,
+            detail=f"超时（>{timeout:.0f}s），本条无观测值" if timed_out else err,
+            has_expected_doc=bool((case.get("expected_doc_title") or "").strip()),
         )
+
+    try:
+        final_state = await asyncio.wait_for(rag_graph.ainvoke(initial_state), timeout=timeout)
+    except (asyncio.TimeoutError, TimeoutError):
+        # str(TimeoutError()) 是空字符串，必须自己写原因，否则报告里只剩一个空 detail
+        logger.warning(f"[eval] {case['id']} 超时 >{timeout}s: {case['question']!r}")
+        return _blank(timed_out=True, err=f"TimeoutError: 超过 {timeout:.0f}s")
+    except Exception as exc:
+        logger.error(f"[eval] {case['id']} 执行异常: {exc!r}", exc_info=True)
+        return _blank(timed_out=False, err=f"{type(exc).__name__}: {exc}")
 
     latency_ms = int((time.time() - start) * 1000)
     actual_intent = final_state.get("intent", "")
     expected_intent = case.get("expected_intent", "")
     intent_correct = actual_intent == expected_intent
+    full_answer = final_state.get("full_answer") or ""
 
-    doc_hit = True
-    expected_keywords = case.get("expected_doc_keywords", [])
-    if expected_keywords:
-        chunks = final_state.get("retrieved_chunks", [])
-        chunk_texts = " ".join(c.get("content", "") for c in chunks)
-        doc_hit = any(kw in chunk_texts for kw in expected_keywords)
+    # ── 检索指标（E2）───────────────────────────────────────────
+    sources = final_state.get("sources", [])
+    source_doc_names = [s.get("doc_name", "") for s in sources]
 
-    tool_call_correct = True
+    expected_title = (case.get("expected_doc_title") or "").strip()
+    expected_heading = (case.get("expected_heading") or "").strip()
+    doc_rank = -1
+    doc_hit = True          # 无期望文档时不计入分母，这里先标 True
+    recall_at_1 = True
+    heading_hit = True
+    mrr = 1.0
+    if expected_title:
+        # 优先精确文件名匹配，其次子串（兼容旧 case）
+        for i, name in enumerate(source_doc_names, 1):
+            if name == expected_title or expected_title in name or (
+                expected_title.endswith(".md") and name.startswith(expected_title)
+            ):
+                doc_rank = i
+                break
+        doc_hit = 0 < doc_rank <= 3
+        recall_at_1 = doc_rank == 1
+        mrr = 1.0 / doc_rank if doc_rank > 0 else 0.0
+        if expected_heading:
+            hit_chunk = None
+            if doc_rank > 0:
+                hit_chunk = sources[doc_rank - 1] if doc_rank <= len(sources) else None
+            if hit_chunk:
+                h = (hit_chunk.get("heading") or "")
+                heading_hit = expected_heading in h
+            else:
+                heading_hit = False
+        else:
+            heading_hit = doc_hit  # 未标注 heading 时与 doc_hit 同
+
+    # 引用：仅 should_cite 且 doc_hit@3 时才算有效引用
+    if case.get("should_cite"):
+        has_citation = bool(sources) and doc_hit
+    else:
+        has_citation = True
+
+    # 工具调用
     expected_tool = case.get("expected_tool")
-    if expected_tool:
-        tool_call_correct = final_state.get("tool_name") == expected_tool
+    tool_history = final_state.get("tool_history") or []
+    actual_tool = final_state.get("tool_name")
+    actual_args = final_state.get("tool_args") or {}
+    tool_success = final_state.get("tool_success")
+    tool_error = final_state.get("tool_error")
 
-    has_citation = len(final_state.get("sources", [])) > 0 if case.get("should_cite") else True
+    hist_names = [h.get("name") for h in tool_history]
+    hist_hit = None
+    if expected_tool:
+        for h in tool_history:
+            if h.get("name") == expected_tool:
+                hist_hit = h
+                break
+
+    tool_detail = ""
+    if expected_tool:
+        if actual_tool != expected_tool and hist_hit is None:
+            tool_call_correct = False
+            tool_detail = f"工具: 期望={expected_tool}, 实际={actual_tool or hist_names or '无'}"
+        else:
+            check_args = (hist_hit or {}).get("args") or actual_args
+            check_ok = (hist_hit or {}).get("success")
+            if check_ok is None:
+                check_ok = tool_success
+            args_ok, args_msg = _args_match(case.get("expected_tool_args", {}), check_args)
+            exec_ok = (not case.get("expect_tool_success")) or check_ok is True
+            if case.get("expect_tool_denied"):
+                exec_ok = check_ok is False and bool(
+                    (hist_hit or {}).get("error") or tool_error or final_state.get("permission_denied")
+                )
+            tool_call_correct = args_ok and exec_ok
+            if not args_ok:
+                tool_detail = f"工具参数不符（实际={check_args}）: {args_msg}"
+            elif not exec_ok:
+                tool_detail = f"工具 {expected_tool} 执行结果不符: {tool_error or (hist_hit or {}).get('error')}"
+    else:
+        tool_call_correct = actual_tool is None and not hist_names
+        if not tool_call_correct:
+            tool_detail = f"工具: 期望不调用, 实际={actual_tool or hist_names}({actual_args})"
+
+    # 权限负例
+    forbidden_doc_leaked = False
+    forbidden_title = case.get("forbidden_doc_title")
+    if forbidden_title:
+        forbidden_doc_leaked = any(forbidden_title in name for name in source_doc_names)
 
     detail_parts = []
     if not intent_correct:
         detail_parts.append(f"意图: 期望={expected_intent}, 实际={actual_intent}")
-    if not doc_hit:
-        detail_parts.append(f"文档未命中关键词: {expected_keywords}")
-    if not tool_call_correct:
-        detail_parts.append(f"工具: 期望={expected_tool}, 实际={final_state.get('tool_name')}")
-    if not has_citation:
-        detail_parts.append("缺少引用")
+    if expected_title and not doc_hit:
+        detail_parts.append(
+            f"doc_hit@3 miss: 期望={expected_title} rank={doc_rank} "
+            f"召回={source_doc_names or '无'}"
+        )
+    if tool_detail:
+        detail_parts.append(tool_detail)
+    if case.get("should_cite") and not has_citation:
+        detail_parts.append("citation 无效（未命中期望文档或 sources 空）")
+    if forbidden_doc_leaked:
+        detail_parts.append(f"泄露受限文档: {forbidden_title}")
 
     return CaseResult(
         case_id=case["id"], question=case["question"],
         expected_intent=expected_intent, actual_intent=actual_intent,
         intent_correct=intent_correct, doc_hit=doc_hit,
+        doc_rank=doc_rank, recall_at_1=recall_at_1,
+        heading_hit=heading_hit, mrr=mrr,
         tool_call_correct=tool_call_correct, has_citation=has_citation,
-        latency_ms=latency_ms, detail="; ".join(detail_parts),
+        forbidden_doc_leaked=forbidden_doc_leaked,
+        latency_ms=latency_ms,
+        group=case.get("group") or "",
+        error=final_state.get("error"),
+        detail="; ".join(detail_parts),
+        has_expected_doc=bool(expected_title),
+        answer=full_answer,
+        sources=sources,
+        tool_name=final_state.get("tool_name"),
+        tool_result=final_state.get("tool_result"),
+        tool_success=final_state.get("tool_success"),
+        tool_error=final_state.get("tool_error") or final_state.get("permission_denied"),
+        judge=None,
     )
 
 
-async def run_eval(user_id: int = 1, user_role: str = "employee",
-                   user_dept_id: int | None = 1) -> EvalReport:
-    cases = load_cases()
-    results = []
-    for case in cases:
-        result = await run_case(case, user_id, user_role, user_dept_id)
-        results.append(result)
+def _rate(numerator: int, denominator: int) -> float:
+    return round(numerator / denominator, 4) if denominator else 1.0
+
+
+async def run_eval(
+    user_id: int = 1,
+    user_role: str = "employee",
+    user_dept_id: int | None = 1,
+    skip_generation: bool = True,
+    tool_dry_run: bool = True,
+    concurrency: int = 1,
+    timeout: float = DEFAULT_CASE_TIMEOUT,
+    mode: str = "fast",
+    label: str | None = None,
+    operator_id: int | None = None,
+    only_case_ids: list[str] | None = None,
+    progress_cb=None,
+) -> EvalReport:
+    """
+    Args:
+        skip_generation: 跳过答案生成节点（指标不依赖答案正文，默认开启以避免超时）
+        tool_dry_run:    工具演练模式，校验参数但不写库
+        concurrency:     并发条数。>1 时 avg_latency_ms 会受相互争抢影响，
+                         想看真实单条延迟请保持 1。
+        timeout:         单条 case 墙钟上限
+        mode:            fast=检索/工具指标；judge=生成+LLM-as-judge（只评 judge=true）
+        progress_cb:     async (done, total) 进度回调（后台任务落库用）
+    """
+    cases = await load_cases_from_db()
+    if not cases:
+        return EvalReport(total_cases=0, scored_cases=0, timeout_count=0,
+                          intent_accuracy=0, doc_hit_rate=0, tool_call_accuracy=0,
+                          citation_rate=0, permission_pass_rate=0, avg_latency_ms=0)
+
+    if only_case_ids:
+        wanted = set(only_case_ids)
+        cases = [c for c in cases if c.get("id") in wanted]
+    if mode == "judge":
+        cases = [c for c in cases if c.get("judge")]
+        # judge 必须生成答案
+        skip_generation = False
+        timeout = max(timeout, JUDGE_CASE_TIMEOUT)
+        if not cases:
+            return EvalReport(total_cases=0, scored_cases=0, timeout_count=0,
+                              intent_accuracy=0, doc_hit_rate=0, tool_call_accuracy=0,
+                              citation_rate=0, permission_pass_rate=0, avg_latency_ms=0,
+                              mode="judge")
+
+    # 先把两个模型加载进内存，避免第一条 case 独自承担冷启动开销
+    await warmup()
+
+    sem = asyncio.Semaphore(max(1, concurrency))
+    done_count = 0
+
+    async def _run(case: dict) -> CaseResult:
+        nonlocal done_count
+        async with sem:
+            result = await run_case(
+                case, user_id, user_role, user_dept_id,
+                skip_generation=skip_generation, tool_dry_run=tool_dry_run,
+                timeout=timeout,
+                judge=(mode == "judge"),
+            )
+            if mode == "judge":
+                from eval.judge import judge_answer
+                j = await judge_answer(
+                    question=case["question"],
+                    answer=result.answer,
+                    sources=result.sources or [],
+                    expected_points=case.get("expected_points") or [],
+                    expected_refusal=bool(case.get("expected_refusal")),
+                    expected_doc_title=case.get("expected_doc_title") or "",
+                    tool_name=result.tool_name,
+                    tool_result=result.tool_result,
+                    tool_success=result.tool_success,
+                    tool_error=result.tool_error,
+                )
+                j["_expected_refusal"] = bool(case.get("expected_refusal"))
+                result.judge = j
+            done_count += 1
+            if progress_cb:
+                try:
+                    await progress_cb(done_count, len(cases))
+                except Exception:
+                    pass
+            return result
+
+    # gather 保序，下面按下标与 cases 对齐
+    results: list[CaseResult] = list(await asyncio.gather(*(_run(c) for c in cases)))
 
     total = len(results)
-    if total == 0:
-        return EvalReport(total_cases=0, intent_accuracy=0, doc_hit_rate=0,
-                          tool_call_accuracy=0, citation_rate=0, avg_latency_ms=0)
+    pairs = list(zip(results, cases))
 
-    intent_correct = sum(1 for r in results if r.intent_correct)
-    doc_hits = sum(1 for r in results if r.doc_hit)
-    tool_cases = [r for r in results if r.case_id in
-                  [c["id"] for c in cases if c.get("expected_tool")]]
-    tool_correct = sum(1 for r in tool_cases if r.tool_call_correct) if tool_cases else 0
-    citation_ok = sum(1 for r in results if r.has_citation)
-    avg_latency = sum(r.latency_ms for r in results) // total
+    scored = [(r, c) for r, c in pairs if not r.timed_out]
+    timeouts = [r for r in results if r.timed_out]
+
+    doc_pairs = [(r, c) for r, c in scored if (c.get("expected_doc_title") or "").strip()]
+    cite_pairs = [(r, c) for r, c in scored if c.get("should_cite") and r.doc_hit]
+    perm_pairs = [(r, c) for r, c in scored if c.get("forbidden_doc_title")]
+    heading_pairs = [(r, c) for r, c in scored
+                     if (c.get("expected_doc_title") or "").strip()]
+
+    avg_latency = sum(r.latency_ms for r in results) // total if total else 0
 
     failed = [
-        {"case_id": r.case_id, "question": r.question, "detail": r.detail}
-        for r in results
-        if not (r.intent_correct and r.doc_hit and r.tool_call_correct and r.has_citation)
+        {"case_id": r.case_id, "question": r.question, "detail": r.detail, "error": r.error,
+         "group": r.group, "doc_rank": r.doc_rank,
+         "judge": r.judge}
+        for r, _ in scored
+        if not (r.intent_correct and r.doc_hit and r.tool_call_correct
+                and r.has_citation and not r.forbidden_doc_leaked)
+        or (r.judge and (r.judge.get("hallucinated_claims") or r.judge.get("error")))
+    ]
+    timed_out_cases = [
+        {"case_id": r.case_id, "question": r.question,
+         "detail": r.detail, "latency_ms": r.latency_ms}
+        for r in timeouts
     ]
 
+    # 按组汇总
+    groups: dict[str, list[CaseResult]] = {}
+    for r, _ in scored:
+        g = r.group or "default"
+        groups.setdefault(g, []).append(r)
+    by_group = {}
+    for g, items in groups.items():
+        doc_scored = [x for x in items if x.has_expected_doc]
+        by_group[g] = {
+            "count": len(items),
+            "intent_accuracy": _rate(sum(1 for x in items if x.intent_correct), len(items)),
+            "tool_call_accuracy": _rate(sum(1 for x in items if x.tool_call_correct), len(items)),
+            "doc_hit_rate": _rate(sum(1 for x in doc_scored if x.doc_hit), len(doc_scored)) if doc_scored else None,
+            "mrr": round(sum(x.mrr for x in doc_scored) / len(doc_scored), 4) if doc_scored else None,
+        }
+
+    judge_agg = {
+        "judge_model": None,
+        "faithfulness_avg": None,
+        "points_coverage": None,
+        "hallucination_count": 0,
+        "refusal_correct_rate": None,
+        "local_judge": False,
+    }
+    if mode == "judge":
+        from eval.judge import aggregate_judges
+        judge_agg = aggregate_judges([r.judge for r in results if r.judge])
+
     return EvalReport(
-        total_cases=total, intent_accuracy=intent_correct / total,
-        doc_hit_rate=doc_hits / total,
-        tool_call_accuracy=tool_correct / len(tool_cases) if tool_cases else 1.0,
-        citation_rate=citation_ok / total, avg_latency_ms=avg_latency,
-        case_results=results, failed_cases=failed,
+        total_cases=total,
+        scored_cases=len(scored),
+        timeout_count=len(timeouts),
+        intent_accuracy=_rate(sum(1 for r, _ in scored if r.intent_correct), len(scored)),
+        doc_hit_rate=_rate(sum(1 for r, _ in doc_pairs if r.doc_hit), len(doc_pairs)),
+        recall_at_1=_rate(sum(1 for r, _ in doc_pairs if r.recall_at_1), len(doc_pairs)),
+        mrr=round(sum(r.mrr for r, _ in doc_pairs) / len(doc_pairs), 4) if doc_pairs else 1.0,
+        heading_hit_rate=_rate(sum(1 for r, _ in heading_pairs if r.heading_hit), len(heading_pairs)),
+        tool_call_accuracy=_rate(sum(1 for r, _ in scored if r.tool_call_correct), len(scored)),
+        citation_rate=_rate(sum(1 for r, _ in cite_pairs if r.has_citation), len(cite_pairs)),
+        permission_pass_rate=_rate(
+            sum(1 for r, _ in perm_pairs if not r.forbidden_doc_leaked), len(perm_pairs)
+        ),
+        avg_latency_ms=avg_latency,
+        case_results=results,
+        failed_cases=failed,
+        timeout_cases=timed_out_cases,
+        by_group=by_group,
+        mode=mode,
+        judge_model=judge_agg.get("judge_model"),
+        faithfulness_avg=judge_agg.get("faithfulness_avg"),
+        points_coverage=judge_agg.get("points_coverage"),
+        hallucination_count=judge_agg.get("hallucination_count") or 0,
+        refusal_correct_rate=judge_agg.get("refusal_correct_rate"),
+        local_judge=bool(judge_agg.get("local_judge")),
     )

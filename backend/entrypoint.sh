@@ -25,9 +25,10 @@ echo "      Seed complete."
 WORKERS=${GUNICORN_WORKERS:-2}
 
 echo "[3/3] Starting Gunicorn (workers=${WORKERS})..."
+# 注意：gunicorn 依赖 Unix fcntl，仅 Linux/Docker 使用；Windows 请用 uvicorn
 exec uv run gunicorn main:app \
-    --workers "${WORKERS}" \
     --worker-class uvicorn.workers.UvicornWorker \
+    --workers "${WORKERS}" \
     --bind 0.0.0.0:8000 \
     --timeout 300 \
     --keep-alive 5 \

@@ -1,15 +1,19 @@
-# WorkPilot v2 — 企业智能 Agent 系统
+# WorkPilot v2 — 企业员工事务办理 Agent
 
 ## 项目概述
 
-企业智能 Agent 系统，三大模块：
-- **模块一** 运维监控 Agent（SSH 采集 + 告警 + 人工确认操作）
-- **模块二** 内部知识库 Agent（员工 RAG 问答，第一阶段优先实现）
-- **模块三** 客服 Agent（外部客户 API，第三阶段实现）
+面向企业员工的事务办理 Agent：能查制度（RAG）、能算额度（工具）、能办申请（多步 + 人工确认）、能走审批（管理员后台）、可全程回溯（trace + 审计）。
 
-当前处于**第一阶段**：用户权限体系 + 模块二知识库 + 基础前端聊天界面。
+**范围决策：** 集中资源把员工事务办理这一条垂直链路做深、做完整；运维监控与客服 Agent 仅作为 Roadmap，当前不实现。
 
-完整需求文档见 [docs/需求文档.md](docs/需求文档.md)，系统架构见 [docs/系统架构.md](docs/系统架构.md)，API 文档见 [docs/API文档.md](docs/API文档.md)。
+**当前阶段：** 第一阶段基础设施（权限体系 + 知识库 RAG + 工具调用 + 评测）已完成，正在按 [docs/业务场景设计.md](docs/业务场景设计.md) 推进：
+- 场景 A：报销申请预审 → 缺信息追问 → 人工确认 → 提交 → 审批（主场景）
+- 场景 B：IT 工单闭环
+- 场景 C：知识缺口分析 + 用户反馈
+- 场景 D：权限差异化回答示例数据
+- 配套工程：Agent 多步循环 + checkpointer + interrupt、节点级 trace、多轮查询改写、评测升级、混合检索
+
+完整需求文档见 [docs/需求文档.md](docs/需求文档.md)，系统架构见 [docs/系统架构.md](docs/系统架构.md)，API 文档见 [docs/API文档.md](docs/API文档.md)，业务场景与补齐清单见 [docs/业务场景设计.md](docs/业务场景设计.md)。
 
 ---
 
@@ -27,7 +31,7 @@
 | 前端 | React + Ant Design Pro |
 | 部署 | Docker + Docker Compose（nginx / frontend / backend / postgres / ollama） |
 | SSH 采集 | Paramiko（运维模块） |
-| 定时任务 | APScheduler + PostgreSQLJobStore（防多 Worker 重复执行） |
+| 定时任务 | APScheduler + PostgreSQLJobStore + **进程级选主**（`pg_try_advisory_lock`）；JobStore 只持久化定义，不防多进程触发 |
 
 ---
 
@@ -65,7 +69,11 @@ v2/
 ```bash
 cd backend
 uv sync                        # 安装依赖
-uv run fastapi dev main.py     # 开发启动（热重载，端口 8000）
+# Windows：uvicorn / fastapi dev（gunicorn 依赖 Unix fcntl，不能在 Windows 跑）
+uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+# 或 uv run fastapi dev main.py
+# Linux/Docker 生产：
+# uv run gunicorn -k uvicorn.workers.UvicornWorker -w 4 main:app -b 0.0.0.0:8000
 uv add <package>               # 添加依赖
 ```
 
@@ -77,7 +85,7 @@ uv add <package>               # 添加依赖
 
 1. **pgvector 替代独立向量库**：向量与结构化数据同 PostgreSQL 实例，权限过滤在同一 SQL 查询完成。
 2. **Embedding 模型唯一性**：文档向量化和查询向量化必须用同一个 Ollama Embedding 模型，切换模型时需重新向量化全部文档。
-3. **APScheduler 用 PostgreSQLJobStore**：Gunicorn 多 Worker 场景下防止定时任务重复执行。
+3. **定时任务单实例**：多 worker 下仅 `pg_try_advisory_lock` 选主成功的进程启动 APScheduler；JobStore 本身**不能**防止跨进程重复触发。非 leader 不跑 cleanup。
 4. **Nginx 关闭 proxy_buffering**：所有 `/api/*/stream` 路径必须关闭缓冲，`proxy_read_timeout` 设为 300s，保障 SSE 实时性。
 5. **仅 Nginx 端口对外**：postgres(5432)、backend(8000)、ollama(11434) 均不对宿主机暴露。
 
@@ -111,11 +119,20 @@ uv add <package>               # 添加依赖
 ### SSE 流式输出格式
 
 ```
+data: {"type": "conversation_id", "content": "123"}
+data: {"type": "queued", "content": {"position": 2}}
 data: {"type": "token", "content": "..."}
 data: {"type": "sources", "content": [...]}
+data: {"type": "tool_call", "content": {"tool_name": "...", "tool_args": {...}, "allowed": true, "result": ..., "latency_ms": 0, "requires_confirmation": false, "missing_slots": null}}
+data: {"type": "confirm_required", "content": {"tool_name": "submit_reimbursement_request", "payload": {"request_id": 1, "request_no": "RB-...", "form": {...}, "precheck": {...}}}}
+data: {"type": "form_incomplete", "content": {"missing_slots": ["trip_start"], "message": "请补充：出差开始日期"}}
 data: {"type": "done", "content": ""}
 data: {"type": "error", "content": "错误信息"}
 ```
+
+- `queued`：LLM 并发槽位等待时推送 `{"position": n}`；等待超 `llm_queue_timeout` 后跟 `error: 系统繁忙`
+- `confirm_required`：写操作生成草稿后推送，前端渲染确认卡；确认调 `POST /api/reimbursements/{id}/confirm`，取消调 `cancel`
+- `form_incomplete`：槽位缺失，前端提示补充字段后用户继续对话
 
 ### 文档权限四级
 
@@ -130,23 +147,28 @@ data: {"type": "error", "content": "错误信息"}
 
 ---
 
-## 第一阶段交付范围
+## 交付范围
 
-**后端（完整实现）：**
+**已完成（第一阶段基础设施）：**
 - 用户认证：JWT + bcrypt + 三级角色
 - 文档管理：上传、解析（.md / .docx / .pdf）、分块、向量化、pgvector 存储
 - RAG 问答：LangGraph 工作流（意图识别 → 检索 → 工具决策 → 工具执行 → 生成）、SSE 流式输出、引用来源
 - 工具调用：3 个企业工具（员工信息 / 报销额度 / IT 工单）+ 权限校验 + 审计日志
-- 评测回归：15 条 golden cases + eval runner + POST /api/eval/run
-- 审计日志
+- 评测回归：golden cases + eval runner + POST /api/eval/run
+- 前端：登录、聊天（流式 + 引用 + 工具卡片）、历史会话、管理后台
 - Docker Compose 部署
 
-**前端（够用即可）：**
-- 登录页
-- 聊天主界面（发消息 + 流式显示 + 引用来源展示 + 工具调用展示）
-- 历史会话列表
+**进行中（按 [docs/业务场景设计.md](docs/业务场景设计.md) 的 P0 → P1 顺序）：**
+- P0：Agent 多步循环 + Postgres checkpointer + 写操作 interrupt 人工确认；工具数据 DB 化 + seed 脚本；节点级 trace；多轮查询改写
+- 场景 A 报销申请全链路 + 管理员审批后台
+- P1：评测升级（Recall@K、LLM-as-judge、eval_runs 落库对比）、用户反馈、知识缺口页、混合检索、文档版本
 
-**暂不实现：** 运维监控、客服 Agent。
+**设计原则（实现新场景时遵守）：**
+- LLM 只做决策和解释，数值校验、规则判断由代码完成
+- 所有写操作工具标记 `requires_confirmation`，经 interrupt 由用户确认后才执行，且必须幂等
+- 新增 SSE 事件类型需同步更新本文件「SSE 流式输出格式」和 API 文档
+
+**不实现：** 运维监控、客服 Agent（仅 Roadmap）。
 
 ---
 

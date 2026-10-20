@@ -1,6 +1,6 @@
 ﻿# WorkPilot v2 - 开发模式脚本（Windows PowerShell）
 #
-# 基础设施（postgres / ollama）跑在 Docker，
+# 基础设施：postgres 跑在 Docker，ollama 用本机安装版（127.0.0.1:11434），
 # 后端和前端在本机直接运行，代码改动即时生效，无需重新构建。
 #
 # 用法：
@@ -11,13 +11,13 @@
 #   .\dev.ps1 restart fe     重启前端
 #   .\dev.ps1 restart all    重启后端和前端
 #   .\dev.ps1 status         查看服务状态
-#   .\dev.ps1 logs [svc]     查看 Docker 容器日志（postgres / ollama）
-#   .\dev.ps1 pull-models    首次使用时拉取 Ollama 模型
+#   .\dev.ps1 logs [svc]     查看 Docker 容器日志（postgres）
+#   .\dev.ps1 pull-models    向本机 Ollama 拉取模型（nomic-embed-text / qwen2.5:7b）
 #   .\dev.ps1 psql           进入 PostgreSQL 交互终端
 #
 # 端口：
 #   postgres  :5432   (Docker，暴露到本机)
-#   ollama    :11434  (Docker，暴露到本机)
+#   ollama    :11434  (本机 Ollama 服务)
 #   backend   :8000   (本机直接运行，FastAPI 热重载)
 #   frontend  :5173   (本机直接运行，Vite dev server)
 
@@ -55,7 +55,7 @@ function Assert-Docker {
     }
     $null = docker info 2>&1
     if ($LASTEXITCODE -ne 0) {
-        Write-Err "Docker 未运行，请先启动 Docker Desktop"; exit 1
+        Write-Err "Docker 未运行，请先启动 Docker Desktop（postgres 需要 Docker，ollama 已用本机版）"; exit 1
     }
 }
 
@@ -84,20 +84,55 @@ function Assert-Env {
     }
 }
 
+function Test-Ollama {
+    # 检查本机 Ollama 是否可用（127.0.0.1:11434）
+    $ok = $false
+    try {
+        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -TimeoutSec 3 -ErrorAction Stop
+        $ok = $true
+    } catch {
+        $ok = $false
+    }
+    return $ok
+}
+
+function Test-OllamaModel {
+    param($ModelName)
+    try {
+        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -TimeoutSec 3 -ErrorAction Stop
+        $names = @($resp.models | ForEach-Object { $_.name })
+        return ($names -contains $ModelName) -or ($names -contains "${ModelName}:latest")
+    } catch {
+        return $false
+    }
+}
+
+function Assert-Ollama {
+    if (-not (Test-Ollama)) {
+        Write-Err "本机 Ollama 未运行（http://127.0.0.1:11434），请先启动 Ollama 应用后重试"
+        exit 1
+    }
+    # 检查必需模型
+    $needPull = @()
+    if (-not (Test-OllamaModel "nomic-embed-text"))  { $needPull += "nomic-embed-text" }
+    if (-not (Test-OllamaModel "qwen2.5:7b"))        { $needPull += "qwen2.5:7b" }
+    if ($needPull.Count -gt 0) {
+        Write-Warn "本机 Ollama 缺少模型：$($needPull -join ', ')"
+        Write-Warn "请运行：.\dev.ps1 pull-models"
+    }
+}
+
 # ---------- 读取 .env，把 Docker 内部地址替换为 localhost ─────────
 
 function Get-DevEnv {
+    # 只注入「本地开发必须覆盖」的几项，不要把整个 .env 灌成进程环境变量：
+    # 否则 OPENAI_API_KEY 等会在启动时被冻结，改 .env 后 Settings 热加载读不到新值。
     $env_vars = @{}
-    Get-Content $EnvFile | ForEach-Object {
-        $line = $_.Trim()
-        if ($line -and -not $line.StartsWith('#') -and $line -match '^([^=]+)=(.*)$') {
-            $env_vars[$Matches[1].Trim()] = $Matches[2].Trim()
-        }
-    }
 
-    # 把 Docker 服务名替换为 127.0.0.1，禁用 SSL
-    if ($env_vars['DATABASE_URL']) {
-        $url = $env_vars['DATABASE_URL'] -replace '@postgres:', '@127.0.0.1:'
+    # DATABASE_URL：Docker 服务名 → 127.0.0.1，并禁用 SSL
+    $dbLine = Get-Content $EnvFile | Where-Object { $_ -match '^DATABASE_URL=' } | Select-Object -First 1
+    if ($dbLine -match '^DATABASE_URL=(.*)$') {
+        $url = $Matches[1].Trim() -replace '@postgres:', '@127.0.0.1:'
         if ($url -notmatch '\?') { $url += '?ssl=disable' }
         $env_vars['DATABASE_URL'] = $url
     }
@@ -160,9 +195,44 @@ function Get-ProcessStatus {
 
 # ---------- Docker Compose 封装 ---------------------------------------
 
+# 检测 docker compose 插件 vs 独立 docker-compose 二进制
+# 注意：PowerShell 会把单元素数组拆成标量，所以用字符串 + 空格分隔再拆分
+function Get-ComposeCmd {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $null = & docker compose version 2>&1
+        if ($LASTEXITCODE -eq 0) { return "docker compose" }
+    } catch { }
+    finally { $ErrorActionPreference = $prev }
+    if (Get-Command docker-compose -ErrorAction SilentlyContinue) { return "docker-compose" }
+    Write-Err "找不到 docker compose 或 docker-compose，请安装 Docker Compose"
+    exit 1
+}
+
 function Invoke-DC {
+    param([string]$DockerCmd)
     Push-Location $Root
-    Invoke-Expression "docker compose -f docker-compose.yml -f docker-compose.dev.yml $args"
+    # 拆分命令字符串为参数数组，再用 & 调用（不用 Invoke-Expression）
+    $tokens = @()
+    $buffer = ""
+    $inQuote = $false
+    foreach ($ch in $DockerCmd.ToCharArray()) {
+        if ($ch -eq '"') { $inQuote = -not $inQuote; continue }
+        if ($ch -eq ' ' -and -not $inQuote) {
+            if ($buffer.Length -gt 0) { $tokens += $buffer; $buffer = "" }
+        } else {
+            $buffer += $ch
+        }
+    }
+    if ($buffer.Length -gt 0) { $tokens += $buffer }
+
+    $composeCmd = Get-ComposeCmd
+    $composeArgs = @($composeCmd -split ' ')
+    $exe = $composeArgs[0]
+    $rest = @()
+    if ($composeArgs.Length -gt 1) { $rest = $composeArgs[1..($composeArgs.Length-1)] }
+    & $exe @rest -f docker-compose.yml -f docker-compose.dev.yml @tokens
     $exit = $LASTEXITCODE
     Pop-Location
     return $exit
@@ -179,17 +249,23 @@ switch ($Action.ToLower()) {
         Assert-Node
         Assert-Uv
         Assert-Env
+        Assert-Ollama
 
-        # 1. 启动基础设施（postgres + ollama），暴露端口到本机
-        Write-Step "启动 postgres / ollama（端口暴露到本机）..."
-        Invoke-DC up -d postgres ollama | Out-Null
+        # 1. 启动基础设施（仅 postgres 用 Docker；ollama 用本机版本）
+        Write-Step "启动 postgres（Docker，端口暴露到本机）..."
+        Invoke-DC "up -d postgres" | Out-Null
+        Write-Step "使用本机 Ollama（http://127.0.0.1:11434）..."
 
         # 2. 等待 postgres 健康
         Write-Step "等待 postgres 就绪..."
         $waited = 0
         while ($waited -lt 60) {
-            $out = (docker compose ps postgres --format json 2>$null | Out-String).Trim()
-            if ($out -match '"healthy"') { break }
+            # 用容器名健康检查，不依赖 docker compose 插件
+            $cname = (docker ps --filter "name=postgres" --format "{{.Names}}" 2>$null | Select-Object -First 1)
+            if ($cname) {
+                docker exec $cname pg_isready -U workpilot -d workpilot 2>$null | Out-Null
+                if ($LASTEXITCODE -eq 0) { break }
+            }
             Start-Sleep 2
             $waited += 2
             Write-Host "    ${waited}s ..." -ForegroundColor DarkGray
@@ -244,8 +320,8 @@ switch ($Action.ToLower()) {
         Write-Rule
         Stop-NativeProcess $BackendPid  "Backend"
         Stop-NativeProcess $FrontendPid "Frontend"
-        Write-Step "停止 Docker 容器..."
-        Invoke-DC stop postgres ollama | Out-Null
+        Write-Step "停止 Docker 容器（postgres；本机 Ollama 保持运行）..."
+        Invoke-DC "stop postgres" | Out-Null
         Write-OK "已停止（数据卷保留）"
         Write-Host "  清除全部数据：docker compose down -v" -ForegroundColor DarkGray
         Write-Rule
@@ -308,8 +384,18 @@ switch ($Action.ToLower()) {
         Write-Title "WorkPilot - 服务状态"
         Write-Rule
         Assert-Docker
-        Write-Host "`nDocker 容器：" -ForegroundColor White
-        Invoke-DC ps --format "table {{.Service}}`t{{.Status}}`t{{.Ports}}"
+        Write-Host "`nDocker 容器（postgres）：" -ForegroundColor White
+        Invoke-DC "ps --format ""table {{.Service}}`t{{.Status}}`t{{.Ports}}"""
+        Write-Host "`n本机 Ollama：" -ForegroundColor White
+        if (Test-Ollama) {
+            Write-Host "  运行中（http://127.0.0.1:11434）" -ForegroundColor Green
+            foreach ($m in @("nomic-embed-text", "qwen2.5:7b")) {
+                $state = if (Test-OllamaModel $m) { "OK" } else { "缺少" }
+                Write-Host "  $m : $state" -ForegroundColor $(if ($state -eq "OK") { "Gray" } else { "Yellow" })
+            }
+        } else {
+            Write-Host "  未运行" -ForegroundColor Red
+        }
         Write-Host "`n本机进程：" -ForegroundColor White
         Write-Host "  $(Get-ProcessStatus $BackendPid  'Backend')"  -ForegroundColor Cyan
         Write-Host "  $(Get-ProcessStatus $FrontendPid 'Frontend')" -ForegroundColor Cyan
@@ -318,20 +404,31 @@ switch ($Action.ToLower()) {
 
     "logs" {
         Assert-Docker
+        if ($Service -eq "ollama") {
+            Write-Err "ollama 现在跑在本机，无 Docker 日志。请直接查看 Ollama 应用日志"
+            exit 1
+        }
         Write-Host "追踪 $Service 日志  （Ctrl+C 退出）" -ForegroundColor Cyan
-        Invoke-DC logs -f --tail=100 $Service
+        Invoke-DC "logs -f --tail=100 $Service"
     }
 
     "pull-models" {
-        Write-Title "WorkPilot - 拉取 Ollama 模型（首次部署时执行）"
+        Write-Title "WorkPilot - 向本机 Ollama 拉取模型（首次部署时执行）"
         Write-Rule
-        Assert-Docker
-        Invoke-DC up -d ollama | Out-Null
-        Start-Sleep 3
+        if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
+            Write-Err "找不到 ollama 命令，请确认已安装并加入 PATH"
+            exit 1
+        }
+        if (-not (Test-Ollama)) {
+            Write-Err "本机 Ollama 未运行，请先启动 Ollama 应用"
+            exit 1
+        }
         Write-Step "拉取 nomic-embed-text（Embedding 模型）..."
-        Invoke-DC exec ollama ollama pull nomic-embed-text
+        & ollama pull nomic-embed-text
+        if ($LASTEXITCODE -ne 0) { Write-Err "nomic-embed-text 拉取失败"; exit 1 }
         Write-Step "拉取 qwen2.5:7b（推理模型）..."
-        Invoke-DC exec ollama ollama pull "qwen2.5:7b"
+        & ollama pull "qwen2.5:7b"
+        if ($LASTEXITCODE -ne 0) { Write-Err "qwen2.5:7b 拉取失败，请重试 .\dev.ps1 pull-models（会从断点续传）"; exit 1 }
         Write-OK "模型已就绪"
         Write-Rule
     }
@@ -339,7 +436,7 @@ switch ($Action.ToLower()) {
     "psql" {
         Assert-Docker
         Write-Step "进入 PostgreSQL（\q 退出）..."
-        Invoke-DC exec postgres psql -U workpilot -d workpilot
+        Invoke-DC "exec postgres psql -U workpilot -d workpilot"
     }
 
     default {
